@@ -1,0 +1,294 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#183f35">
+  <title>מעבדת פני שטח — לומדים מפות טופוגרפיות</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Crect width='48' height='48' rx='12' fill='%23183f35'/%3E%3Cpath d='M7 31c5-14 12-21 19-21 6 0 8 5 15 5M6 38c7-12 13-18 20-18 6 0 9 5 16 5' fill='none' stroke='%23b9d2ad' stroke-width='3'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="./src/style.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand" aria-label="מעבדת פני שטח">
+        <svg class="brand-mark" viewBox="0 0 48 48" fill="none" aria-hidden="true">
+          <path d="M7 31c5-14 12-21 19-21 6 0 8 5 15 5M6 38c7-12 13-18 20-18 6 0 9 5 16 5M12 42c5-8 9-12 15-12 5 0 8 4 13 4"/>
+        </svg>
+        <div>
+          <h1 id="sheepSecret" tabindex="0" role="button" aria-label="מעבדת פני שטח — חמש לחיצות להפתעה">מעבדת פני שטח</h1>
+          <p>מפסלים גובה. מגלים קווי גובה.</p>
+        </div>
+      </div>
+      <div class="header-actions">
+        <button class="button button-quiet" id="observerBtn" type="button" aria-pressed="false">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="5" r="2.5"/><path d="M8 21v-5l-2-3 2-5h8l2 5-2 3v5M12 8v13"/></svg>
+          <span>הצבת אדם</span>
+        </button>
+        <button class="button button-quiet" id="exerciseBtn" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 3.5 7.5 12 12l8.5-4.5L12 3Z"/><path d="m5 11 7 4 7-4M5 15l7 4 7-4"/></svg>
+          <span>תרגיל מודרך</span>
+        </button>
+        <button class="button button-primary" id="topoBtn" type="button" aria-pressed="false">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 17c2-7 5-11 9-11 3 0 4 2 7 2M3 21c3-6 6-9 10-9 3 0 5 2 8 2"/></svg>
+          <span>הצג מפה טופוגרפית</span>
+        </button>
+        <button class="icon-button" id="helpBtn" type="button" aria-label="הוראות שימוש" title="הוראות שימוש">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.8 9a2.3 2.3 0 1 1 3.4 2c-.8.5-1.2 1-1.2 2M12 17h.01"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <section class="exercise-strip" id="exerciseStrip" hidden aria-label="תרגיל מודרך">
+      <div class="exercise-icon" aria-hidden="true">
+        <svg viewBox="0 0 32 32"><path d="M3 25 13 8l5 8 3-4 8 13H3Z"/><path d="M9 25c2-5 4-7 7-7s5 2 7 7"/></svg>
+      </div>
+      <div class="exercise-copy">
+        <div class="exercise-title-row">
+          <strong>משימה: בנו גבעה</strong>
+          <span id="exerciseProgress">0 מתוך 2</span>
+        </div>
+        <p>הגביהו את מרכז המשטח ל־60 מ׳ לפחות, כך שיווצרו שלושה קווי גובה או יותר.</p>
+      </div>
+      <button class="button button-exercise" id="checkExerciseBtn" type="button">בדיקה</button>
+      <button class="icon-button exercise-close" id="closeExerciseBtn" type="button" aria-label="סגירת התרגיל">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>
+      </button>
+    </section>
+
+    <main class="workspace">
+      <section class="panel scene-panel" aria-labelledby="sceneTitle">
+        <div class="panel-heading">
+          <div>
+            <span class="panel-kicker" id="sceneKicker">מבט במרחב</span>
+            <h2 id="sceneTitle">פני השטח בתלת־ממד</h2>
+          </div>
+          <div class="panel-heading-actions">
+            <span class="elevation-badge"><span class="status-dot"></span><span id="maxHeight">0 מ׳</span></span>
+            <button class="panel-focus-button" id="focusSceneBtn" type="button" aria-pressed="false" aria-label="תלת־ממד במסך מלא" title="מסך מלא">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"/></svg>
+            <span>מסך מלא</span></button>
+          </div>
+        </div>
+        <div class="scene-viewport" id="sceneContainer">
+          <div class="scene-poster" id="scenePoster" aria-hidden="true">
+            <svg viewBox="0 0 300 220"><path d="M20 178 98 90l30 35 42-70 110 123H20Z"/><path d="m52 178 58-56 23 26 37-54 76 84M93 178l39-27 25 16 27-25 39 36"/></svg>
+            <span>טוען תצוגה תלת־ממדית…</span>
+          </div>
+          <div class="scene-tools">
+            <button class="glass-button" id="resetCameraBtn" type="button" title="איפוס זווית" aria-label="איפוס זווית התצוגה">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 1 0 2.3-5.7L4 8.6M4 4v4.6h4.6"/></svg>
+            </button>
+            <button class="glass-button" id="topCameraBtn" type="button" title="מבט מלמעלה" aria-label="מבט מלמעלה">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 9 5-9 5-9-5 9-5Z"/><path d="m5 12 7 4 7-4M5 16l7 4 7-4"/></svg>
+            </button>
+          </div>
+          <div class="orbit-hint" id="orbitHint">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 11V7a2 2 0 0 1 4 0v4-6a2 2 0 0 1 4 0v7-3a2 2 0 0 1 4 0v6c0 4-3 6-7 6-3 0-5-2-7-5l-3-4a2 2 0 0 1 3-2l2 1Z"/></svg>
+            גררו כדי לסובב · צבטו כדי לקרב
+          </div>
+          <div class="joystick-zone" dir="ltr">
+            <div class="joystick" id="moveJoystick" role="group" aria-label="ג'ויסטיק תנועה: ימינה ושמאלה לסיבוב, למעלה ולמטה לתנועה">
+              <div class="joystick-base"><div class="joystick-nub"></div></div>
+              <span class="joystick-tag">תנועה</span>
+            </div>
+            <div class="joystick" id="zoomJoystick" role="group" aria-label="ג'ויסטיק קירוב והטיה: למעלה ולמטה">
+              <div class="joystick-base"><div class="joystick-nub"></div></div>
+              <span class="joystick-tag">קירוב</span>
+            </div>
+          </div>
+        </div>
+        <div class="scene-footer">
+          <label id="exaggerationLabel" for="exaggerationRange">הגזמה אנכית</label>
+          <input id="exaggerationRange" aria-describedby="exaggerationNote" type="range" min="1" max="10" value="1.6" step="0.2">
+          <output id="exaggerationValue" for="exaggerationRange">×1.6</output>
+          <span class="scene-scale-note" id="exaggerationNote">×1 = יחס גבהים ומרחקים אמיתי. ההגזמה משנה את התצוגה בלבד.</span>
+          <label id="observerTiltLabel" for="observerTiltRange" hidden>זווית מבט</label>
+          <input id="observerTiltRange" type="range" min="-45" max="45" value="-5" step="1" hidden>
+          <output id="observerTiltValue" for="observerTiltRange" hidden>-5°</output>
+        </div>
+      </section>
+
+      <div id="panelSplitter" class="panel-splitter" role="separator" aria-label="שינוי חלוקת הרוחב בין התלת־ממד למפה" aria-orientation="vertical" aria-valuemin="25" aria-valuemax="70" aria-valuenow="42" tabindex="0" title="גררו לשינוי רוחב הפאנלים; לחיצה כפולה לאיפוס"><span>⋮</span></div>
+      <section class="panel map-panel" aria-labelledby="mapTitle">
+        <div class="panel-heading">
+          <div>
+            <span class="panel-kicker" id="mapKicker">משטח עריכה</span>
+            <h2 id="mapTitle">מבט מלמעלה</h2>
+          </div>
+          <div class="panel-heading-actions">
+            <div class="height-readout" aria-live="polite">
+              <span>גובה נקודה</span>
+              <strong id="pointHeight">0 מ׳</strong>
+            </div>
+            <button class="panel-focus-button" id="focusMapBtn" type="button" aria-pressed="false" aria-label="מפה במסך מלא" title="מסך מלא">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"/></svg>
+            <span>מסך מלא</span></button>
+          </div>
+        </div>
+        <aside class="tool-dock" aria-label="כלי פיסול">
+        <button class="small-action" id="removeObserverBtn" type="button" hidden>הסתרת האדם</button>
+        <section class="tool-section mode-section">
+          <div class="tool-section-title"><span>כלי פיסול</span><span class="tool-mode" id="toolMode">הגבהה</span></div>
+          <div class="mode-switch" role="group" aria-label="בחירת פעולה">
+            <button class="mode-button active" id="raiseBtn" type="button" aria-pressed="true">
+              <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M16 7v18M7 16h18"/></svg>
+              <span>הגבהה</span>
+            </button>
+            <button class="mode-button" id="lowerBtn" type="button" aria-pressed="false">
+              <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M7 16h18"/></svg>
+              <span>הנמכה</span>
+            </button>
+          </div>
+        </section>
+
+        <section class="tool-section rail-section pan-section">
+          <button class="rail-button" id="panMapBtn" type="button" aria-pressed="false" title="גררו את המפה בלי לשנות את פני השטח">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 11V6a2 2 0 0 1 4 0v4-2a2 2 0 0 1 4 0v3-1a2 2 0 0 1 4 0v4c0 4-3 7-7 7h-1c-3 0-5-1-7-4l-3-4a2 2 0 0 1 3-2l3 3"/></svg>
+            <span>הזזת מפה</span>
+          </button>
+        </section>
+
+        <section class="tool-section rail-section sliders-section">
+          <button class="rail-button" id="brushSettingsBtn" type="button" aria-expanded="false" aria-controls="brushPopover">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 4 6 6-9 9H5v-6l9-9Z"/><path d="m11 7 6 6M5 19c-2 0-3 1-3 2h8"/></svg>
+            <span>מברשת</span>
+          </button>
+          <div class="rail-popover" id="brushPopover" hidden aria-label="הגדרות מברשת">
+            <div class="popover-heading"><strong>הגדרות מברשת</strong><button class="popover-close" id="closeBrushBtn" type="button" aria-label="סגירת הגדרות המברשת">×</button></div>
+            <div class="range-heading"><label for="brushRange">גודל מברשת</label><output id="brushValue" for="brushRange">24</output></div>
+            <input id="brushRange" type="range" min="8" max="48" value="24" step="1">
+            <div class="range-heading strength-heading"><label for="strengthRange">עוצמה</label><output id="strengthValue" for="strengthRange">14 מ׳/ש׳</output></div>
+            <input id="strengthRange" type="range" min="2" max="40" value="14" step="2">
+            <p class="popover-note">קצב שינוי הגובה במרכז המברשת, במטרים לשנייה.</p>
+          </div>
+        </section>
+
+        <section class="tool-section history-section">
+          <button class="small-action" id="undoBtn" type="button" disabled>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 7 4 12l5 5M5 12h8a6 6 0 0 1 6 6"/></svg>
+            ביטול
+          </button>
+          <button class="small-action" id="resetBtn" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 1 0 2.3-5.7L4 8.6M4 4v4.6h4.6"/></svg>
+            איפוס
+          </button>
+        </section>
+
+        <section class="tool-section rail-section random-section">
+          <button class="rail-button" id="randomTerrainBtn" type="button" title="יצירת שתי או שלוש כיפות מחוברות">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m2 19 6-10 4 6 3-5 7 9H2Z"/><path d="M17 3v4M15 5h4"/></svg>
+            <span>אקראי</span>
+          </button>
+        </section>
+
+        <section class="tool-section rail-section presets-section">
+          <button class="rail-button" id="presetsBtn" type="button" aria-expanded="false" aria-controls="presetsPopover">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 19 6-12 4 7 3-5 5 10H3Z"/><path d="M7 19c2-4 4-6 6-6s3 2 5 6"/></svg>
+            <span>תבניות</span>
+          </button>
+          <div class="rail-popover presets-popover" id="presetsPopover" hidden aria-label="תבניות פני שטח">
+            <div class="popover-heading"><strong>נקודת התחלה</strong><button class="popover-close" id="closePresetsBtn" type="button" aria-label="סגירת התבניות">×</button></div>
+            <div class="preset-grid">
+              <button class="preset-button" type="button" data-preset="hill"><svg viewBox="0 0 48 28" aria-hidden="true"><path d="M3 24c8 0 10-19 21-19s13 19 21 19H3Z"/></svg>גבעה</button>
+              <button class="preset-button" type="button" data-preset="ridge"><svg viewBox="0 0 48 28" aria-hidden="true"><path d="M3 24 15 9l7 7 8-12 15 20H3Z"/></svg>רכס</button>
+              <button class="preset-button" type="button" data-preset="valley"><svg viewBox="0 0 48 28" aria-hidden="true"><path d="M3 5c8 0 10 19 21 19s13-19 21-19H3Z"/></svg>עמק</button>
+              <button class="preset-button" type="button" data-preset="crater"><svg viewBox="0 0 48 28" aria-hidden="true"><path d="M3 24C10 24 9 5 17 5c5 0 4 12 7 12s2-12 7-12c8 0 7 19 14 19H3Z"/></svg>מכתש</button>
+            </div>
+          </div>
+        </section>
+        </aside>
+        <section class="sheep-controls" id="sheepControls" hidden aria-label="חפשו את הכבשה">
+          <div class="sheep-actions">
+            <strong>🐑 חפשו את הכבשה</strong>
+            <button class="small-action" id="placeSheepBtn" type="button">הצבת כבשה</button>
+            <button class="small-action" id="hideSheepBtn" type="button" aria-pressed="false" disabled>הסתרה במפה</button>
+            <button class="small-action" id="findSheepBtn" type="button" disabled>הגעתי לכבשה</button>
+            <button class="small-action" id="removeSheepBtn" type="button" disabled>הסרת הכבשה</button>
+          </div>
+          <p id="sheepStatus" role="status" aria-live="polite">הציבו כבשה על אחת הכיפות.</p>
+          <small>גררו את האדם במפה כדי להתקדם. ההצלחה דורשת מבט אדם, מרחק עד 50 מ׳ וקו ראייה פנוי. הכבשה מוגדלת כסמל לצורכי המשחק.</small>
+        </section>
+
+        <div class="map-wrap" id="mapWrap">
+          <div class="map-surface" id="mapSurface">
+            <canvas id="mapCanvas" aria-label="מפת פני שטח לעריכה. גררו על המפה כדי להגביה או להנמיך." tabindex="0"></canvas>
+          </div>
+          <div class="map-corner map-north" aria-hidden="true"><span>צ</span><svg viewBox="0 0 24 32"><path d="m12 2 7 25-7-5-7 5 7-25Z"/></svg></div>
+          <div class="map-scale" aria-hidden="true"><span></span><b id="mapScaleText">1 ק״מ</b></div>
+          <div class="map-mode-label" id="mapModeLabel">גובה 0 מ׳</div>
+          <div class="map-view-label" id="mapViewLabel" aria-live="polite">קנה מידה 1:25,000 · זום 100%</div>
+          <div class="map-zoom-controls" role="group" aria-label="זום והזזת המפה">
+            <button id="mapZoomInBtn" type="button" aria-label="התקרבות" title="התקרבות">+</button>
+            <button id="mapZoomOutBtn" type="button" aria-label="התרחקות" title="התרחקות">−</button>
+            <button id="centerMapBtn" type="button" aria-label="הצגת המפה כולה" title="הצגת המפה כולה">מרכז</button>
+          </div>
+        </div>
+        <div class="map-footer">
+          <button class="small-action export-pdf" id="exportPdfBtn" type="button" title="ייצוא המפה הטופוגרפית כקובץ PDF להדפסה">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v11m0 0 4-4m-4 4-4-4M5 21h14"/></svg>
+            <span>PDF להדפסה</span>
+          </button>
+          <label class="interval-control map-size-control" for="mapSizeSelect">
+            גודל מפה
+            <select id="mapSizeSelect">
+              <option value="4" selected>4×4 ק״מ</option>
+              <option value="6">6×6 ק״מ</option>
+              <option value="8">8×8 ק״מ</option>
+            </select>
+          </label>
+          <div class="map-legend" id="mapLegend" aria-label="מקרא גובה">
+            <span>נמוך</span><div class="legend-ramp"></div><span>גבוה</span>
+          </div>
+          <div class="topographic-controls" id="topographicControls">
+            <label class="interval-control" for="scaleSelect">
+              קנה מידה
+              <select id="scaleSelect" aria-describedby="printScaleHelp">
+                <option value="25000" selected>1:25,000</option>
+                <option value="50000">1:50,000</option>
+                <option value="100000">1:100,000</option>
+              </select>
+            </label>
+            <label class="interval-control" for="intervalSelect" id="intervalControl" hidden>
+              מרווח קווים
+              <select id="intervalSelect">
+                <option value="5">5 מ׳</option>
+                <option value="10" selected>10 מ׳</option>
+                <option value="20">20 מ׳</option>
+              </select>
+            </label>
+            <details class="scale-help"><summary>על קנה המידה והזום</summary><p id="printScaleHelp">קנה המידה קובע את המרחק האמיתי של המשבצות: ב־1:25,000 כל משבצת מייצגת 500 מ׳, ב־1:50,000 היא מייצגת 1 ק״מ, וב־1:100,000 היא מייצגת 2 ק״מ. הזום רק מקרב או מרחיק את מצלמת התצוגה: המפה גדלה על המסך ואפשר לגרור אותה, אבל השטח, הקואורדינטות, הגבהים והיחסים בין הפריטים אינם משתנים.</p></details>
+            <span class="scale-note" id="scaleNote">קנה מידה בסיסי 1:25,000 · זום תצוגה 100%</span>
+          </div>
+        </div>
+      </section>
+
+
+    </main>
+
+    <footer class="app-footer">
+      <span><strong>קווי גובה</strong> מחברים נקודות בעלות אותו גובה.</span>
+      <span class="footer-status"><span class="status-dot"></span>שתי התצוגות מסונכרנות</span>
+    </footer>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+  <dialog class="help-dialog" id="helpDialog" aria-labelledby="helpTitle">
+    <div class="dialog-heading">
+      <div><span class="panel-kicker">איך מתחילים?</span><h2 id="helpTitle">ממשטח שטוח למפה טופוגרפית</h2></div>
+      <button class="icon-button" id="closeHelpBtn" type="button" aria-label="סגירה"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+    </div>
+    <ol class="help-steps">
+      <li><span>1</span><div><strong>בחרו פעולה</strong><p>פלוס מגביה ומינוס מנמיך. העוצמה נמדדת במטרים לשנייה, וגודל המברשת קובע את שטח השינוי.</p></div></li>
+      <li><span>2</span><div><strong>גררו על המפה</strong><p>התלת־ממד משתנה מיד. אפשר לבחור מפה של 4×4, 6×6 או 8×8 ק״מ; בהגדלה נוסף שטח סביב פני השטח הקיימים.</p></div></li>
+      <li><span>3</span><div><strong>חשפו את המפה הטופוגרפית</strong><p>קווי הגובה מחושבים אוטומטית. קווים צפופים מציינים שיפוע תלול; קווים רחוקים — שיפוע מתון.</p></div></li>
+      <li><span>4</span><div><strong>צפו מתוך השטח</strong><p>לחצו על „הצבת אדם” ובחרו נקודה. גררו את האדם לשינוי מיקום ואת קצה החץ לשינוי כיוון ההסתכלות.</p></div></li>
+      <li><span>5</span><div><strong>ניווט במקלדת ובמגע</strong><p>לחצו על התצוגה התלת־ממדית: חצים לסיבוב ולתנועה, ‏PageUp/PageDown לקירוב ולהטיה. במכשירי מגע מופיעים שני ג'ויסטיקים על התצוגה.</p></div></li>
+    </ol>
+    <button class="button button-primary dialog-done" id="doneHelpBtn" type="button">הבנתי, נתחיל</button>
+  </dialog>
+
+  <script type="module" src="./src/scene.js"></script>
+</body>
+</html>
