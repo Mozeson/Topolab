@@ -3,6 +3,7 @@ import { initPanelSplitter } from './splitter.js';
 import { initNavigation } from './nav.js';
 import { createMapFeatures } from './map-features.js';
 import { createRainSimulation } from './rain.js';
+import { createPdfPreviewController } from './pdf-preview.js';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { contours } from 'd3-contour';
@@ -571,14 +572,47 @@ function drawMap() {
   if (!sheepGame?.placing && !state.observer.placing && !state.observerDrag && (!state.observer.firstPerson || state.drawing)) drawBrush();
 }
 
-// Same drawing as the on-screen topographic map, composed on a paper background for print.
-function drawPrintBlock(ctx, w, h, dpr) {
+// Same terrain data as the editor, composed independently for the PDF options.
+function drawPrintBlock(ctx, w, h, dpr, options = {}) {
   ctx.fillStyle = '#fdfcf8';
   ctx.fillRect(0, 0, w, h);
-  drawGridLines(ctx, w, h, dpr);
+  if (options.mapStyle !== 'contours') {
+    const printRaster = document.createElement('canvas');
+    printRaster.width = N;
+    printRaster.height = N;
+    const printRasterCtx = printRaster.getContext('2d');
+    const image = printRasterCtx.createImageData(N, N);
+    for (let y = 0; y < N; y++) {
+      for (let x = 0; x < N; x++) {
+        const index = y * N + x;
+        const shade = options.mapStyle === 'shaded' ? hillshade(x, y) : 1;
+        const [red, green, blue] = heightColor(heights[index], false);
+        const pixel = index * 4;
+        image.data[pixel] = clamp(red * shade, 0, 255);
+        image.data[pixel + 1] = clamp(green * shade, 0, 255);
+        image.data[pixel + 2] = clamp(blue * shade, 0, 255);
+        image.data[pixel + 3] = 255;
+      }
+    }
+    printRasterCtx.putImageData(image, 0, 0);
+    ctx.save();
+    ctx.globalAlpha = clamp(options.tintOpacity ?? .85, 0, 1);
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(printRaster, 0, 0, w, h);
+    ctx.restore();
+  }
+  if (options.showGrid !== false) drawGridLines(ctx, w, h, dpr);
+  else {
+    ctx.save();
+    ctx.strokeStyle = 'rgba(55,76,80,.78)';
+    ctx.lineWidth = 1.1 * dpr;
+    ctx.strokeRect(1 * dpr, 1 * dpr, w - 2 * dpr, h - 2 * dpr);
+    ctx.restore();
+  }
   drawContours(ctx, w, h, dpr);
-  drawGridLabels(ctx, w, h, dpr);
-  mapFeatures?.draw2D(ctx, { width: w, height: h }, dpr, false);
+  if (options.showCoordinates !== false) drawGridLabels(ctx, w, h, dpr);
+  if (options.showFeatures !== false) mapFeatures?.draw2D(ctx, { width: w, height: h }, dpr, false);
 }
 
 // ——— Three.js terrain model ———
@@ -802,6 +836,42 @@ function resizeThree() {
   camera.updateProjectionMatrix();
   if (scene) renderer.render(scene, camera);
   needsRender = false;
+}
+
+async function capture3DForPdf(view = 'isometric') {
+  if (!scene || !camera) throw new Error('The 3D scene is not ready.');
+  const captureWidth = 1600;
+  const captureHeight = 1000;
+  const captureRenderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true, alpha: false });
+  captureRenderer.setPixelRatio(1);
+  captureRenderer.setSize(captureWidth, captureHeight, false);
+  captureRenderer.outputColorSpace = THREE.SRGBColorSpace;
+  captureRenderer.toneMapping = THREE.ACESFilmicToneMapping;
+  captureRenderer.toneMappingExposure = 0.96;
+  captureRenderer.shadowMap.enabled = true;
+  captureRenderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+  const captureCamera = camera.clone();
+  captureCamera.aspect = captureWidth / captureHeight;
+  captureCamera.near = .1;
+  captureCamera.far = 180;
+  if (view === 'isometric') {
+    captureCamera.position.set(WORLD_SIZE * 1.4, WORLD_SIZE * 1.05, WORLD_SIZE * 1.45);
+    captureCamera.up.set(0, 1, 0);
+    captureCamera.lookAt(0, -.2, 0);
+  } else if (view === 'top') {
+    captureCamera.position.set(0, WORLD_SIZE * 2.1, .001);
+    captureCamera.up.set(0, 0, -1);
+    captureCamera.lookAt(0, 0, 0);
+  }
+  captureCamera.updateProjectionMatrix();
+  captureCamera.updateMatrixWorld(true);
+  scene.updateMatrixWorld(true);
+  captureRenderer.render(scene, captureCamera);
+  const image = captureRenderer.domElement.toDataURL('image/jpeg', .94);
+  captureRenderer.dispose();
+  captureRenderer.forceContextLoss();
+  return image;
 }
 
 function updateSkirt() {
@@ -1689,14 +1759,8 @@ $('intervalSelect').addEventListener('change', (event) => {
   updateTerrain();
   drawMap();
 });
-let exportBusy = false;
-$('exportPdfBtn').addEventListener('click', async () => {
-  if (exportBusy) return;
-  exportBusy = true;
-  $('exportPdfBtn').disabled = true;
-  try {
-    const { exportTopographicPdf } = await import('./print.js');
-    await exportTopographicPdf({
+const pdfPreview = createPdfPreviewController({
+  getData: () => ({
       sizeKm: state.mapSize,
       interval: state.interval,
       scale: state.scale,
@@ -1705,15 +1769,13 @@ $('exportPdfBtn').addEventListener('click', async () => {
       colorMin: MIN_HEIGHT,
       colorMax: MAX_HEIGHT,
       mapBlock: drawPrintBlock,
-    });
-    showToast('המפה יוצאה ל־PDF בהצלחה.');
-  } catch (error) {
-    console.error('PDF export failed', error);
-    showToast('הייצוא ל־PDF נכשל. נסו שוב.', true);
-  } finally {
-    exportBusy = false;
-    $('exportPdfBtn').disabled = false;
-  }
+      exaggeration: state.exaggeration,
+  }),
+  capture3D: capture3DForPdf,
+  notify: showToast,
+});
+$('exportPdfBtn').addEventListener('click', () => {
+  pdfPreview.open();
 });
 $('exaggerationRange').addEventListener('input', (event) => {
   state.exaggeration = Number(event.target.value);
