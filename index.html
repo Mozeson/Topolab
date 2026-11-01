@@ -26,6 +26,10 @@
           <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="5" r="2.5"/><path d="M8 21v-5l-2-3 2-5h8l2 5-2 3v5M12 8v13"/></svg>
           <span>הצבת אדם</span>
         </button>
+        <button class="button button-nav" id="navBtn" type="button" title="ניווט בשטח בין נקודות שקבעתם מראש">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m15.5 8.5-2.2 4.8-4.8 2.2 2.2-4.8 4.8-2.2Z"/></svg>
+          <span>ניווט</span>
+        </button>
         <button class="button button-quiet" id="exerciseBtn" type="button">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 3.5 7.5 12 12l8.5-4.5L12 3Z"/><path d="m5 11 7 4 7-4M5 15l7 4 7-4"/></svg>
           <span>תרגיל מודרך</span>
@@ -84,6 +88,48 @@
           <div class="orbit-hint" id="orbitHint">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 11V7a2 2 0 0 1 4 0v4-6a2 2 0 0 1 4 0v7-3a2 2 0 0 1 4 0v6c0 4-3 6-7 6-3 0-5-2-7-5l-3-4a2 2 0 0 1 3-2l2 1Z"/></svg>
             גררו כדי לסובב · צבטו כדי לקרב
+          </div>
+          <div class="nav-hud" id="navHud" hidden>
+            <div class="nav-vignette" aria-hidden="true"></div>
+            <div class="nav-compass" id="navCompass" aria-hidden="true">
+              <div class="nav-compass-window">
+                <div class="nav-compass-tape" id="navCompassTape"></div>
+                <div class="nav-compass-target" id="navCompassTarget" hidden></div>
+                <div class="nav-compass-needle"></div>
+              </div>
+              <div class="nav-compass-readout" id="navHeadingReadout">0°</div>
+            </div>
+            <div class="nav-stats" role="status" aria-live="off">
+              <div class="nav-timer" id="navTimer">00:00</div>
+              <div class="nav-progress"><span id="navProgressText">נקודה 1 מתוך 5</span><div class="nav-progress-dots" id="navProgressDots"></div></div>
+              <div class="nav-pace"><span>קצב</span><div class="nav-pace-bar"><i id="navPaceBar"></i></div><b id="navSlopeText">מישור</b></div>
+              <div class="nav-penalty" id="navPenalty" hidden></div>
+            </div>
+            <div class="nav-actions">
+              <button class="nav-icon-btn" id="navPauseBtn" type="button" aria-label="השהיה (Esc)" title="השהיה (Esc)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5v14M15 5v14"/></svg></button>
+              <button class="nav-icon-btn" id="navSoundBtn" type="button" aria-pressed="true" aria-label="צלילים" title="צלילים"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h4l5-4v14l-5-4H4Z"/><path class="sound-wave" d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/></svg></button>
+            </div>
+            <div class="nav-map" id="navMapCard" hidden>
+              <div class="nav-map-head"><strong>מפה</strong><span id="navMapNote"></span><button class="nav-map-size" id="navMapSizeBtn" type="button" aria-label="הגדלת המפה (M)" title="הגדלה / הקטנה (M)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"/></svg></button></div>
+              <canvas id="navMapCanvas" aria-label="מפת הניווט"></canvas>
+            </div>
+            <button class="nav-peek" id="navPeekBtn" type="button" hidden>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>
+              <span>הצצה במפה</span><kbd>M</kbd><b id="navPeekCount"></b>
+            </button>
+            <div class="nav-hint" id="navHint" aria-live="polite"></div>
+            <div class="nav-keys" id="navKeys"><kbd>W</kbd><kbd>↑</kbd> קדימה · <kbd>A</kbd><kbd>D</kbd> פנייה · גרירה להסתכלות · <kbd>Shift</kbd> ריצה · <kbd>M</kbd> מפה · <kbd>Esc</kbd> השהיה</div>
+            <div class="nav-flash" id="navFlash" aria-live="assertive"></div>
+            <div class="nav-countdown" id="navCountdown" hidden></div>
+            <div class="nav-pause" id="navPause" hidden>
+              <div class="nav-pause-card">
+                <strong>הניווט מושהה</strong>
+                <p>הזמן עצר. המפה לא מוצגת בזמן ההשהיה.</p>
+                <button class="button button-go" id="navResumeBtn" type="button">המשך ניווט</button>
+                <button class="button nav-ghost" id="navRestartBtn" type="button">התחלה מחדש</button>
+                <button class="button nav-ghost" id="navQuitBtn" type="button">יציאה מהניווט</button>
+              </div>
+            </div>
           </div>
           <div class="joystick-zone" dir="ltr">
             <div class="joystick" id="moveJoystick" role="group" aria-label="ג'ויסטיק תנועה: ימינה ושמאלה לסיבוב, למעלה ולמטה לתנועה">
@@ -161,6 +207,9 @@
               <button class="rail-tool" id="featuresBtn" type="button" data-tool="features" aria-pressed="false" data-shortcut="tool-features">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 18c4-6 7-9 10-9 2 0 3 2 5 2 1 0 2-1 3-3"/><path d="M3 13c3-3 6-5 9-5M4 20h16"/></svg><span>תכסית</span>
               </button>
+              <button class="rail-tool" id="courseBtn" type="button" data-tool="course" aria-pressed="false" data-shortcut="tool-course">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 21V4"/><path d="M5 4h12l-3 4 3 4H5"/><path d="M5 4l12 8" opacity=".55"/></svg><span>מסלול</span>
+              </button>
             </div>
             <div class="rail-group" role="group" aria-label="הדמיה">
               <button class="rail-tool rail-rain" id="rainBtn" type="button" aria-pressed="false" data-shortcut="toggle-rain" data-title="הדמיית זרימת מים לפי התבליט">
@@ -201,6 +250,29 @@
               <div class="options-group" id="panOptions" hidden>
                 <span class="options-tool">הזזת מפה</span>
                 <span class="options-hint">גררו את המפה · גלגלת העכבר או <kbd>+</kbd>/<kbd>−</kbd> לזום · <kbd>0</kbd> להצגת הכל</span>
+              </div>
+              <div class="options-group course-options" id="courseOptions" hidden aria-label="תכנון מסלול ניווט">
+                <div class="course-place" role="radiogroup" aria-label="מה מציבים בלחיצה על המפה">
+                  <button type="button" role="radio" data-course-place="start" aria-checked="false" title="נקודת הזינוק"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4 21 19H3Z"/></svg>זינוק</button>
+                  <button type="button" role="radio" data-course-place="control" aria-checked="true" title="נקודת ביקורת"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/></svg>נקודה</button>
+                  <button type="button" role="radio" data-course-place="finish" aria-checked="false" title="נקודת סיום (ללא סיום — חוזרים לזינוק)"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="5"/></svg>סיום</button>
+                </div>
+                <div class="course-tools">
+                  <label class="footer-control" for="courseCountSelect">
+                    <select id="courseCountSelect">
+                      <option value="3">3</option><option value="4">4</option><option value="5" selected>5</option><option value="6">6</option><option value="8">8</option><option value="10">10</option>
+                    </select>
+                  </label>
+                  <button class="footer-button" id="randomCourseBtn" type="button" title="מסלול אקראי שמעדיף נקודות על תוואי בולט">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 3h5v5M4 20 21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/></svg>מסלול אקראי
+                  </button>
+                  <button class="footer-button" id="undoCourseBtn" type="button" title="הסרת הנקודה האחרונה (Backspace)">הסרת אחרונה</button>
+                  <button class="footer-button" id="clearCourseBtn" type="button">ניקוי</button>
+                </div>
+                <span class="course-summary" id="courseSummary">לחצו על המפה כדי להציב זינוק</span>
+                <button class="button button-go" id="startNavBtn" type="button" disabled>
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4v16l13-8Z"/></svg>יציאה לניווט
+                </button>
               </div>
               <div class="options-group feature-options" id="featureOptions" hidden aria-label="ציור דרכים, שבילים ונחלים">
                 <div class="feature-types">
@@ -340,6 +412,69 @@
     <h3 class="shortcuts-title">קיצורי מקלדת</h3>
     <dl class="shortcut-list" id="shortcutList"></dl>
     <button class="button button-primary dialog-done" id="doneHelpBtn" type="button">הבנתי, נתחיל</button>
+  </dialog>
+
+  <dialog class="nav-dialog" id="navSetupDialog" aria-labelledby="navSetupTitle">
+    <div class="nav-dialog-shell">
+      <section class="nav-briefing" aria-label="מפת המסלול">
+        <canvas id="navBriefingCanvas" aria-label="מפת המסלול לפני היציאה"></canvas>
+        <div class="nav-briefing-meta" id="navBriefingMeta"></div>
+      </section>
+      <section class="nav-setup">
+        <div class="dialog-heading">
+          <div><span class="panel-kicker">תדריך לפני יציאה</span><h2 id="navSetupTitle">יציאה לניווט</h2></div>
+          <button class="icon-button" id="closeNavSetupBtn" type="button" aria-label="סגירה"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+        </div>
+        <p class="nav-setup-lead">הגיעו לכל הנקודות לפי הסדר וחזרו לסיום. בחרו כמה עזרה תקבלו בדרך:</p>
+        <div class="nav-levels" role="radiogroup" aria-label="רמת קושי">
+          <label class="nav-level"><input type="radio" name="navLevel" value="easy"><span class="nav-level-icon">🧭</span><strong>קל</strong><small>מפה פתוחה, רואים איפה אתם וחץ לנקודה הבאה</small></label>
+          <label class="nav-level"><input type="radio" name="navLevel" value="normal" checked><span class="nav-level-icon">🗺️</span><strong>רגיל</strong><small>מפה ומצפן בלבד, בלי סימון מיקום. כמו ניווט אמיתי</small></label>
+          <label class="nav-level"><input type="radio" name="navLevel" value="hard"><span class="nav-level-icon">👁️</span><strong>מאתגר</strong><small>המפה סגורה. כל הצצה מוסיפה 15 שניות</small></label>
+          <label class="nav-level"><input type="radio" name="navLevel" value="memory"><span class="nav-level-icon">🧠</span><strong>מהזיכרון</strong><small>לומדים את המפה עכשיו, ובשטח אין מפה בכלל</small></label>
+        </div>
+        <details class="nav-custom">
+          <summary>התאמה אישית</summary>
+          <label class="footer-control" for="navMapMode">המפה בשטח
+            <select id="navMapMode">
+              <option value="always">פתוחה כל הזמן</option>
+              <option value="peek">נפתחת לפי בקשה (עם עונש)</option>
+              <option value="none">אין מפה</option>
+            </select>
+          </label>
+          <label><input type="checkbox" id="navShowPosition"> סימון המיקום שלי על המפה</label>
+          <label><input type="checkbox" id="navShowBearing"> חץ במצפן לכיוון הנקודה הבאה</label>
+          <label><input type="checkbox" id="navShowDistance"> הצגת המרחק לנקודה הבאה</label>
+        </details>
+        <p class="nav-best" id="navBest" hidden></p>
+        <div class="nav-setup-actions">
+          <button class="button pdf-cancel-button" id="cancelNavSetupBtn" type="button">חזרה לתכנון</button>
+          <button class="button button-go" id="goNavBtn" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4v16l13-8Z"/></svg>יציאה לדרך</button>
+        </div>
+      </section>
+    </div>
+  </dialog>
+
+  <dialog class="nav-dialog nav-results-dialog" id="navResultsDialog" aria-labelledby="navResultsTitle">
+    <div class="nav-dialog-shell">
+      <section class="nav-briefing" aria-label="המסלול שהלכתם">
+        <canvas id="navReplayCanvas" aria-label="המסלול שהלכתם על גבי המפה"></canvas>
+        <div class="nav-replay-legend"><span><i class="legend-course"></i>המסלול המתוכנן</span><span><i class="legend-track"></i>הדרך שלכם</span></div>
+      </section>
+      <section class="nav-setup">
+        <div class="dialog-heading">
+          <div><span class="panel-kicker" id="navResultsKicker">סיימתם את המסלול</span><h2 id="navResultsTitle">כל הכבוד!</h2></div>
+          <button class="icon-button" id="closeNavResultsBtn" type="button" aria-label="סגירה"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+        </div>
+        <div class="nav-score" id="navScore"></div>
+        <div class="nav-result-grid" id="navResultGrid"></div>
+        <table class="nav-splits" id="navSplits"></table>
+        <p class="nav-insight" id="navInsight"></p>
+        <div class="nav-setup-actions">
+          <button class="button pdf-cancel-button" id="navBackToMapBtn" type="button">חזרה למפה</button>
+          <button class="button button-go" id="navAgainBtn" type="button">ניווט חוזר</button>
+        </div>
+      </section>
+    </div>
   </dialog>
 
   <dialog class="pdf-preview-dialog" id="pdfPreviewDialog" aria-labelledby="pdfPreviewTitle">

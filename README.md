@@ -23,4 +23,5 @@ npm run build     # בנייה ל-dist/
 
 - [`docs/UI-GUIDE.md`](docs/UI-GUIDE.md): מבנה הממשק, הכלים, קיצורי המקלדת, השמירה האוטומטית והעקרונות שמנחים את העיצוב.
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md): המודולים, זרימת הנתונים, ואיך מוסיפים כלי, קיצור או הגדרה שנשמרת.
+- [`docs/NAVIGATION.md`](docs/NAVIGATION.md): תכנון מסלול ניווט ומשחק הניווט בגוף ראשון.
 - [`docs/ROADMAP.md`](docs/ROADMAP.md): מה בוצע ומה נשאר בתוכנית השיפורים (שלבים 3–5), עם נקודות פתיחה בקוד.
