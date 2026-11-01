@@ -1,6 +1,8 @@
 import { createSheepGame } from './sheep.js';
 import { initPanelSplitter } from './splitter.js';
 import { initNavigation } from './nav.js';
+import { createMapFeatures } from './map-features.js';
+import { createRainSimulation } from './rain.js';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { contours } from 'd3-contour';
@@ -46,6 +48,8 @@ let toastTimer = null;
 let needsRender = true;
 let sheepGame = null;
 let navigation = null;
+let mapFeatures = null;
+let rainSimulation = null;
 let randomState = 0x72f4a91d;
 let lastRandomHillCount = 0;
 let mapPanDrag = null;
@@ -353,6 +357,7 @@ function resetMapView(showMessage = true) {
 
 function setPanMode(enabled) {
   stopDrawing();
+  if (enabled) mapFeatures?.cancel(true);
   state.panMode = enabled;
   const button = $('panMapBtn');
   button.classList.toggle('active', enabled);
@@ -559,6 +564,8 @@ function drawMap() {
     drawContours(mapCtx, mapCanvas.width, mapCanvas.height, mapDpr);
     drawGridLabels(mapCtx, mapCanvas.width, mapCanvas.height, mapDpr);
   }
+  rainSimulation?.draw2D(mapCtx, mapCanvas, mapDpr);
+  mapFeatures?.draw2D(mapCtx, mapCanvas, mapDpr);
   sheepGame?.draw(mapCtx, mapCanvas, mapDpr);
   drawObserver();
   if (!sheepGame?.placing && !state.observer.placing && !state.observerDrag && (!state.observer.firstPerson || state.drawing)) drawBrush();
@@ -571,6 +578,7 @@ function drawPrintBlock(ctx, w, h, dpr) {
   drawGridLines(ctx, w, h, dpr);
   drawContours(ctx, w, h, dpr);
   drawGridLabels(ctx, w, h, dpr);
+  mapFeatures?.draw2D(ctx, { width: w, height: h }, dpr, false);
 }
 
 // ——— Three.js terrain model ———
@@ -847,6 +855,8 @@ function updateTerrain() {
   }
   if (state.observer.firstPerson) updateObserverCamera();
   sheepGame?.update3D();
+  mapFeatures?.terrainChanged();
+  rainSimulation?.update3D();
   needsRender = true;
 }
 
@@ -1038,6 +1048,7 @@ function resampleForMapSize(oldHeights, oldN, oldSize, newN, newSize) {
 function setMapSize(newSize, restoredHeights = null) {
   if (!MAP_GRID_SIZES[newSize] || newSize === state.mapSize) return;
   stopDrawing();
+  rainSimulation?.stop();
   const nextN = MAP_GRID_SIZES[newSize];
   const nextHeights = restoredHeights
     ? new Float32Array(restoredHeights)
@@ -1076,6 +1087,7 @@ function setMapSize(newSize, restoredHeights = null) {
     baseMesh.geometry = new THREE.BoxGeometry(WORLD_SIZE + .12, .36, WORLD_SIZE + .12);
   }
   sheepGame?.resize(previousMapSize, newSize);
+  mapFeatures?.resize(previousMapSize, newSize);
   updateSceneForMapSize();
   updateMapScaleText();
   resizeMap();
@@ -1116,6 +1128,7 @@ function pushUndo() {
 
 function setTool(tool) {
   if (state.panMode) setPanMode(false);
+  mapFeatures?.cancel(true);
   state.tool = tool;
   const raising = tool > 0;
   $('raiseBtn').classList.toggle('active', raising);
@@ -1142,6 +1155,7 @@ function setTopo(enabled) {
 }
 
 function clearHeights(record = true) {
+  rainSimulation?.stop();
   if (record) pushUndo();
   heights.fill(0);
   state.pointer = null;
@@ -1150,6 +1164,7 @@ function clearHeights(record = true) {
 }
 
 function applyPreset(name) {
+  rainSimulation?.stop();
   pushUndo();
   for (let y = 0; y < N; y++) {
     for (let x = 0; x < N; x++) {
@@ -1178,6 +1193,7 @@ function terrainRandom() {
 
 function applyRandomTerrain() {
   stopDrawing();
+  rainSimulation?.stop();
   closePopovers();
   pushUndo();
   const hillCount = terrainRandom() < .5 ? 2 : 3;
@@ -1320,6 +1336,11 @@ mapCanvas.addEventListener('pointerdown', (event) => {
   if (event.button !== 0 && event.pointerType === 'mouse') return;
   event.preventDefault();
   const next = eventToGrid(event);
+  if (mapFeatures?.handlePointerDown(next.gx, next.gy)) {
+    state.pointer = next;
+    updatePointReadout(next);
+    return;
+  }
   if (sheepGame?.place(next.gx / (N - 1), next.gy / (N - 1))) return;
   if (state.observer.placing) {
     state.pointer = next;
@@ -1336,6 +1357,7 @@ mapCanvas.addEventListener('pointerdown', (event) => {
     drawMap();
     return;
   }
+  rainSimulation?.stop();
   pushUndo();
   state.drawing = true;
   state.pointer = next;
@@ -1370,6 +1392,7 @@ mapCanvas.addEventListener('pointermove', (event) => {
   const next = eventToGrid(event);
   state.pointer = next;
   updatePointReadout(next);
+  if (mapFeatures?.handlePointerMove(next.gx, next.gy)) return;
   if (state.observerDrag) {
     if (state.observerDrag === 'move') {
       state.observer.u = clamp(next.gx / (N - 1), 0, 1);
@@ -1413,6 +1436,11 @@ mapCanvas.addEventListener('pointerleave', (event) => {
   else if (event.pointerType === 'mouse') stopDrawing(event);
 });
 mapCanvas.addEventListener('contextmenu', (event) => event.preventDefault());
+mapCanvas.addEventListener('dblclick', (event) => {
+  if (!mapFeatures?.active) return;
+  event.preventDefault();
+  mapFeatures.handleDoubleClick();
+});
 
 $('mapWrap').addEventListener('wheel', (event) => {
   event.preventDefault();
@@ -1423,6 +1451,7 @@ $('mapWrap').addEventListener('wheel', (event) => {
 }, { passive: false });
 
 mapCanvas.addEventListener('keydown', (event) => {
+  if (mapFeatures?.handleKey(event)) return;
   if (state.panMode) {
     const panStep = event.shiftKey ? 100 : 40;
     if (event.key === 'ArrowLeft') state.mapView.panX -= panStep;
@@ -1483,6 +1512,7 @@ function updateExercise() {
 function startExercise() {
   if (state.exercise) return;
   state.exerciseBackup = { heights: new Float32Array(heights), mapSize: state.mapSize, topo: state.topo };
+  rainSimulation?.stop();
   state.exercise = true;
   $('checkExerciseBtn').textContent = 'בדיקה';
   heights.fill(0);
@@ -1508,7 +1538,7 @@ function closeExercise() {
 }
 
 function closePopovers() {
-  for (const [popoverId, triggerId] of [['brushPopover', 'brushSettingsBtn'], ['presetsPopover', 'presetsBtn']]) {
+  for (const [popoverId, triggerId] of [['brushPopover', 'brushSettingsBtn'], ['presetsPopover', 'presetsBtn'], ['featuresPopover', 'featuresBtn']]) {
     $(popoverId).hidden = true;
     $(triggerId).setAttribute('aria-expanded', 'false');
   }
@@ -1576,14 +1606,17 @@ $('focusMapBtn').addEventListener('click', () => setFocus('map'));
 $('focusSceneBtn').addEventListener('click', () => setFocus('scene'));
 $('brushSettingsBtn').addEventListener('click', () => togglePopover('brushPopover', 'brushSettingsBtn'));
 $('presetsBtn').addEventListener('click', () => togglePopover('presetsPopover', 'presetsBtn'));
+$('featuresBtn').addEventListener('click', () => togglePopover('featuresPopover', 'featuresBtn'));
 $('closeBrushBtn').addEventListener('click', closePopovers);
 $('closePresetsBtn').addEventListener('click', closePopovers);
+$('closeFeaturesBtn').addEventListener('click', closePopovers);
 document.addEventListener('pointerdown', (event) => {
   if (!event.target.closest('.rail-popover, .rail-button')) closePopovers();
 });
 document.addEventListener('keydown', (event) => {
   if (event.key !== 'Escape') return;
   sheepGame?.cancelPlacement();
+  mapFeatures?.cancel(true);
   closePopovers();
   if (state.focus) { setFocus(state.focus); return; }
   if (state.observer.placing || state.observer.firstPerson) exitObserver();
@@ -1591,6 +1624,7 @@ document.addEventListener('keydown', (event) => {
 
 $('observerBtn').addEventListener('click', () => {
   sheepGame?.cancelPlacement();
+  mapFeatures?.cancel(true);
   if (state.observer.firstPerson || state.observer.placing) {
     exitObserver();
     return;
@@ -1758,6 +1792,8 @@ window.__APP_STATS__ = () => ({
   observer: { ...state.observer },
   observerGroundHeight: sampleHeight(state.observer.u, state.observer.v),
   randomHillCount: lastRandomHillCount,
+  mapFeatures: mapFeatures?.stats() || null,
+  rain: rainSimulation?.stats() || null,
   updateQueued,
   cameraPosition: camera ? camera.position.toArray() : null,
   cameraDirection: camera ? camera.getWorldDirection(new THREE.Vector3()).toArray() : null,
@@ -1777,6 +1813,34 @@ sheepGame = createSheepGame({
   verticalScale: () => metersToWorld() * state.exaggeration,
   redraw: drawMap, invalidate: () => { needsRender = true; }, stop: stopDrawing,
   cancelObserverPlacement: () => { state.observer.placing = false; updateObserverUI(); },
+});
+mapFeatures = createMapFeatures({
+  scene: () => scene,
+  worldSize: () => WORLD_SIZE,
+  gridSize: () => N,
+  height: sampleHeight,
+  verticalScale: () => metersToWorld() * state.exaggeration,
+  redraw: drawMap,
+  invalidate: () => { needsRender = true; },
+  notify: showToast,
+  prepareDrawing: () => {
+    stopDrawing();
+    setPanMode(false);
+    sheepGame?.cancelPlacement();
+    state.observer.placing = false;
+    updateObserverUI();
+    closePopovers();
+  },
+});
+rainSimulation = createRainSimulation({
+  scene: () => scene,
+  worldSize: () => WORLD_SIZE,
+  gridSize: () => N,
+  heights: () => heights,
+  height: sampleHeight,
+  verticalScale: () => metersToWorld() * state.exaggeration,
+  redraw: drawMap,
+  invalidate: () => { needsRender = true; },
 });
 initPanelSplitter(() => { resizeMap(); resizeThree(); });
 if (renderer) {
