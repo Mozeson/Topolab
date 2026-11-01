@@ -20,7 +20,7 @@ function forEachCell(n, gx, gy, radius, visit) {
 }
 
 // Raise (amount > 0) or lower (amount < 0) with a smooth bell falloff.
-export function applyHeightBrush(heights, n, gx, gy, radius, amount, min, max) {
+export function applyHeightBrush(heights, n, gx, gy, radius, amount, min = -100, max = 200) {
   forEachCell(n, gx, gy, radius, (x, y, falloff) => {
     const i = y * n + x;
     heights[i] = clamp(heights[i] + amount * falloff, min, max);

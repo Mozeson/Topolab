@@ -1,3 +1,4 @@
+import { gridResolution, brushRadiusCells, resampleForMapSize } from './terrain-grid.js';
 import { generateTerrain } from './terrain-generator.js';
 import { createSheepGame } from './sheep.js';
 import { initPanelSplitter } from './splitter.js';
@@ -14,14 +15,17 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { contours } from 'd3-contour';
 
 const $ = (id) => document.getElementById(id);
-const MAP_GRID_SIZES = { 4: 96, 6: 144, 8: 192 };
 const MAP_ZOOM_LEVELS = [1, 1.25, 1.5, 2, 3, 4];
-let N = MAP_GRID_SIZES[4];
+let N = gridResolution(4);
 let WORLD_SIZE = 10;
 
 const MIN_HEIGHT = -100;
 const MAX_HEIGHT = 200;
 const BASE_Y = -4.15;
+// Plinth under the terrain model. Sized for the 4 km world and shrunk for smaller maps
+// so the 1 km model doesn't sit on a slab a seventh of its width (6/8 km are unchanged).
+const plinthScale = () => Math.min(1, WORLD_SIZE / 10);
+const plinthBox = () => new THREE.BoxGeometry(WORLD_SIZE + .12 * plinthScale(), .36 * plinthScale(), WORLD_SIZE + .12 * plinthScale());
 const EYE_HEIGHT_METERS = 1.7;
 const OBSERVER_FOV = 65;
 let heights = new Float32Array(N * N);
@@ -31,7 +35,8 @@ const state = {
   tempPan: false,         // space held over the map
   lastFeatureType: 'trail',
   mapSize: 4,
-  brush: 24,
+  brush: 1920,            // brush diameter in metres
+  localSpacing: 5,        // sample spacing (m) for the 1×1 km detailed map
   strength: 14,
   topo: false,
   focus: null,
@@ -264,7 +269,7 @@ function mapFitSide() {
 
 function gridCellMeters() {
   // A reference grid square is 2 cm on a printed map: 500 m at 1:25,000.
-  return state.scale / 50;
+  return Math.min(state.scale / 50, mapExtentMeters());
 }
 
 function gridCellCount() {
@@ -317,7 +322,9 @@ function applyMapSurfaceTransform(baseSide = mapFitSide()) {
 function updateMapViewUI() {
   const zoomPct = Math.round(state.mapView.zoom * 100);
   const scale = `1:${state.scale.toLocaleString('en-US')}`;
-  $('mapViewLabel').textContent = `קנה מידה ${scale} · זום ${zoomPct}%`;
+  const spacing = mapExtentMeters() / (N - 1);
+  const spacingText = spacing < 10 ? Number(spacing.toFixed(1)) : Math.round(spacing);
+  $('mapViewLabel').textContent = `קנה מידה ${scale} · זום ${zoomPct}% · דגימה כל ${spacingText} מ׳`;
   $('mapZoomOutBtn').disabled = state.mapView.zoom <= MAP_ZOOM_LEVELS[0];
   $('mapZoomInBtn').disabled = state.mapView.zoom >= MAP_ZOOM_LEVELS[MAP_ZOOM_LEVELS.length - 1];
   $('centerMapBtn').disabled = state.mapView.zoom === 1 && state.mapView.panX === 0 && state.mapView.panY === 0;
@@ -449,7 +456,7 @@ function drawBrush() {
   const { gx, gy } = state.pointer;
   const x = (gx / (N - 1)) * mapCanvas.width;
   const y = (gy / (N - 1)) * mapCanvas.height;
-  const radius = (state.brush / 100 * N / (N - 1)) * mapCanvas.width;
+  const radius = state.brush / (2 * mapExtentMeters()) * mapCanvas.width;
   mapCtx.save();
   mapCtx.beginPath();
   mapCtx.arc(x, y, radius, 0, Math.PI * 2);
@@ -787,7 +794,7 @@ function initThree() {
     scene.add(groundMesh);
 
     baseMesh = new THREE.Mesh(
-      new THREE.BoxGeometry(WORLD_SIZE + .12, .36, WORLD_SIZE + .12),
+      plinthBox(),
       new THREE.MeshStandardMaterial({ color: 0x40564a, roughness: .96 }),
     );
     baseMesh.position.y = BASE_Y - .18;
@@ -890,9 +897,10 @@ function updateSkirt() {
   if (!skirtGeometry) return;
   const array = skirtGeometry.attributes.position.array;
   const { min } = terrainStats();
-  const bottom = Math.min(-0.55, min * metersToWorld() * state.exaggeration - 0.35);
-  if (baseMesh) baseMesh.position.y = bottom - 0.18;
-  if (groundMesh) groundMesh.position.y = bottom - 0.24;
+  const k = plinthScale();
+  const bottom = Math.min(-0.55 * k, min * metersToWorld() * state.exaggeration - 0.35 * k);
+  if (baseMesh) baseMesh.position.y = bottom - 0.18 * k;
+  if (groundMesh) groundMesh.position.y = bottom - 0.24 * k;
   let offset = 0;
   const put = (x, y, z) => { array[offset++] = x; array[offset++] = y; array[offset++] = z; };
   for (let i = 0; i < perimeter.length; i += 2) {
@@ -967,7 +975,7 @@ function updateBrushRing() {
   brushRing.material.color.setHex(BRUSH_RING_COLORS[tool] || BRUSH_RING_COLORS.raise);
   const cu = state.pointer.gx / (N - 1);
   const cv = state.pointer.gy / (N - 1);
-  const radius = state.brush / 100 * N / (N - 1);
+  const radius = state.brush / (2 * mapExtentMeters());
   const vertical = metersToWorld() * state.exaggeration;
   const positions = brushRing.geometry.attributes.position.array;
   for (let i = 0; i < BRUSH_RING_SEGMENTS; i++) {
@@ -1144,40 +1152,23 @@ function updateSceneForMapSize() {
   resetCamera();
 }
 
-function resampleForMapSize(oldHeights, oldN, oldSize, newN, newSize) {
-  const next = new Float32Array(newN * newN);
-  for (let y = 0; y < newN; y++) {
-    for (let x = 0; x < newN; x++) {
-      const oldU = ((x / (newN - 1) - .5) * newSize / oldSize) + .5;
-      const oldV = ((y / (newN - 1) - .5) * newSize / oldSize) + .5;
-      if (oldU < 0 || oldU > 1 || oldV < 0 || oldV > 1) continue;
-      const gx = oldU * (oldN - 1);
-      const gy = oldV * (oldN - 1);
-      const x0 = Math.floor(gx);
-      const y0 = Math.floor(gy);
-      const x1 = Math.min(oldN - 1, x0 + 1);
-      const y1 = Math.min(oldN - 1, y0 + 1);
-      const tx = gx - x0;
-      const ty = gy - y0;
-      const top = lerp(oldHeights[y0 * oldN + x0], oldHeights[y0 * oldN + x1], tx);
-      const bottom = lerp(oldHeights[y1 * oldN + x0], oldHeights[y1 * oldN + x1], tx);
-      next[y * newN + x] = lerp(top, bottom, ty);
-    }
-  }
-  return next;
-}
-
-function setMapSize(newSize, restoredHeights = null) {
-  if (!MAP_GRID_SIZES[newSize] || newSize === state.mapSize) return;
+// Changes the map extent (km) and/or the 1 km map's sample spacing. Heights are
+// resampled around the centre unless a snapshot is being restored.
+function setMapSize(newSize, restoredHeights = null, localSpacing = state.localSpacing) {
+  const nextN = gridResolution(newSize, localSpacing);
+  if (!nextN || (newSize === state.mapSize && nextN === N && !restoredHeights)) return;
   stopDrawing();
   rainSimulation?.stop();
-  const nextN = MAP_GRID_SIZES[newSize];
   const nextHeights = restoredHeights
     ? new Float32Array(restoredHeights)
     : resampleForMapSize(heights, N, state.mapSize, nextN, newSize);
 
   const previousMapSize = state.mapSize;
+  // The detailed map needs a much smaller brush; remember the regional one for the way back.
+  if (newSize === 1 && previousMapSize !== 1) { state.regionalBrush = state.brush; state.brush = 100; }
+  if (newSize !== 1 && previousMapSize === 1 && state.regionalBrush) state.brush = state.regionalBrush;
   state.mapSize = newSize;
+  state.localSpacing = localSpacing;
   N = nextN;
   WORLD_SIZE = newSize * 2.5;
   heights = nextHeights;
@@ -1187,6 +1178,7 @@ function setMapSize(newSize, restoredHeights = null) {
   state.mapView.panY = 0;
   lastStamp = null;
   $('mapSizeSelect').value = String(newSize);
+  syncDetailControls();
   hideCursorReadout();
 
   rebuildPerimeter();
@@ -1205,17 +1197,34 @@ function setMapSize(newSize, restoredHeights = null) {
   }
   if (baseMesh) {
     baseMesh.geometry.dispose();
-    baseMesh.geometry = new THREE.BoxGeometry(WORLD_SIZE + .12, .36, WORLD_SIZE + .12);
+    baseMesh.geometry = plinthBox();
   }
-  sheepGame?.resize(previousMapSize, newSize);
-  mapFeatures?.resize(previousMapSize, newSize);
+  if (previousMapSize !== newSize) {
+    sheepGame?.resize(previousMapSize, newSize);
+    mapFeatures?.resize(previousMapSize, newSize);
+  }
   updateSceneForMapSize();
   updateMapScaleText();
   resizeMap();
   scheduleUpdate();
   if (!restoredHeights) {
-    showToast(`גודל המפה שונה ל־${newSize}×${newSize} ק״מ. פני השטח הקיימים נשמרו במרכז.`);
+    showToast(`גודל המפה שונה ל־${newSize}×${newSize} ק״מ. המרכז נשמר; בהקטנת השטח השוליים נחתכים.`, { action: { label: 'ביטול', run: undo } });
   }
+}
+
+// The brush is measured in metres, so its limits depend on the map: at least ~4 samples
+// across, at most the whole map. The detail selector only exists for the 1×1 km map.
+function syncDetailControls() {
+  const local = state.mapSize === 1;
+  const spacing = mapExtentMeters() / (N - 1);
+  $('detailControl').hidden = !local;
+  $('detailSelect').value = String(state.localSpacing);
+  updateMapViewUI();
+  $('localGullyControl').hidden = !local;
+  const range = $('brushRange');
+  range.min = String(Math.ceil(4 * spacing / 5) * 5);
+  range.max = String(mapExtentMeters());
+  setBrushSize(state.brush, false);
 }
 
 // ——— Shared state updates ———
@@ -1242,28 +1251,33 @@ function scheduleUpdate() {
 
 // ——— History (undo / redo) ———
 function pushUndo() {
-  history.push({ heights, mapSize: state.mapSize });
+  history.push(currentSnapshot());
   scheduleSave();
+}
+
+function currentSnapshot() {
+  return { heights, mapSize: state.mapSize, localSpacing: state.localSpacing };
 }
 
 function restoreSnapshot(snapshot) {
   rainSimulation?.stop();
   stopDrawing();
-  if (snapshot.mapSize !== state.mapSize) setMapSize(snapshot.mapSize, snapshot.heights);
+  const spacing = snapshot.localSpacing ?? state.localSpacing;
+  if (snapshot.mapSize !== state.mapSize || spacing !== state.localSpacing) setMapSize(snapshot.mapSize, snapshot.heights, spacing);
   else heights.set(snapshot.heights);
   scheduleUpdate();
   scheduleSave();
 }
 
 function undo() {
-  const previous = history.undo({ heights, mapSize: state.mapSize });
+  const previous = history.undo(currentSnapshot());
   if (!previous) { showToast('אין פעולה לבטל.'); return; }
   restoreSnapshot(previous);
   showToast('הפעולה האחרונה בוטלה.', { action: { label: 'חזרה', run: redo } });
 }
 
 function redo() {
-  const next = history.redo({ heights, mapSize: state.mapSize });
+  const next = history.redo(currentSnapshot());
   if (!next) { showToast('אין פעולה לחזור אליה.'); return; }
   restoreSnapshot(next);
   showToast('הפעולה שוחזרה.', { action: { label: 'ביטול', run: undo } });
@@ -1310,13 +1324,14 @@ function syncToolUI() {
   drawMap();
 }
 
-function setBrushSize(value) {
-  state.brush = clamp(Math.round(value), Number($('brushRange').min), Number($('brushRange').max));
+// Brush diameter in metres, rounded to the slider's 5 m step and clamped to its range.
+function setBrushSize(value, save = true) {
+  state.brush = clamp(Math.round(value / 5) * 5, Number($('brushRange').min), Number($('brushRange').max));
   $('brushRange').value = String(state.brush);
-  $('brushValue').value = String(state.brush);
+  $('brushValue').value = formatMapDistance(state.brush);
   updateBrushRing();
   drawMap();
-  scheduleSave();
+  if (save) scheduleSave();
 }
 
 function setStrength(value) {
@@ -1378,7 +1393,7 @@ function applyRandomTerrain(newSeed = false) {
     seedInput.reportValidity();
     return;
   }
-  const options = { seed: Number(seedInput.value) >>> 0 };
+  const options = { seed: Number(seedInput.value) >>> 0, extentMeters: mapExtentMeters(), gullyWidth: Number($('terrain-gullyWidth').value) };
   for (const name of ['relief', 'variation', 'detail', 'valleys']) {
     options[name] = Number($('terrain-' + name).value);
   }
@@ -1392,7 +1407,7 @@ function applyRandomTerrain(newSeed = false) {
 
 // `seconds` is how long the brush acted; strength is metres per second at the centre.
 function applyBrush(gx, gy, seconds, tool = state.tool) {
-  const radius = state.brush / 100 * N;
+  const radius = brushRadiusCells(state.brush, mapExtentMeters(), N);
   if (tool === 'smooth') {
     // Smoothing rate scales with strength so the slider means the same thing for every tool.
     applySmoothBrush(heights, N, gx, gy, radius, state.strength * seconds * .35);
@@ -1607,7 +1622,7 @@ mapCanvas.addEventListener('pointermove', (event) => {
     state.strokeTool = strokeToolFor(event);
     const previous = lastStamp || next;
     const distance = Math.hypot(next.gx - previous.gx, next.gy - previous.gy);
-    const spacing = Math.max(1.5, state.brush / 100 * N * .18);
+    const spacing = Math.max(.25, brushRadiusCells(state.brush, mapExtentMeters(), N) * .18);
     const steps = Math.max(1, Math.ceil(distance / spacing));
     const now = performance.now();
     const elapsed = clamp((now - lastBrushTime) / 1000, 0, .15);
@@ -1713,7 +1728,7 @@ function updateExercise() {
 
 function startExercise() {
   if (state.exercise) return;
-  state.exerciseBackup = { heights: new Float32Array(heights), mapSize: state.mapSize, topo: state.topo };
+  state.exerciseBackup = { heights: new Float32Array(heights), mapSize: state.mapSize, localSpacing: state.localSpacing, topo: state.topo };
   rainSimulation?.stop();
   state.exercise = true;
   $('checkExerciseBtn').textContent = 'בדיקה';
@@ -1732,7 +1747,7 @@ function closeExercise() {
   const backup = state.exerciseBackup;
   state.exercise = false;
   state.exerciseBackup = null;
-  if (backup.mapSize !== state.mapSize) setMapSize(backup.mapSize, backup.heights);
+  if (backup.mapSize !== state.mapSize || backup.localSpacing !== state.localSpacing) setMapSize(backup.mapSize, backup.heights, backup.localSpacing);
   else heights.set(backup.heights);
   $('exerciseStrip').hidden = true;
   $('exerciseBtn').classList.remove('active');
@@ -1876,6 +1891,15 @@ $('mapSizeSelect').addEventListener('change', (event) => {
   setMapSize(newSize);
   scheduleSave();
 });
+$('detailSelect').addEventListener('change', (event) => {
+  pushUndo();
+  setMapSize(state.mapSize, null, Number(event.target.value));
+  scheduleSave();
+  showToast('רמת הפירוט עודכנה. פרטים חדשים נוצרים בפיסול או ביצירת מפה חדשה.', { action: { label: 'ביטול', run: undo } });
+});
+$('terrain-gullyWidth').addEventListener('input', (event) => {
+  $('terrain-gullyWidth-value').value = `${event.target.value} מ׳`;
+});
 function updateMapReferenceScale(showMessage = false) {
   stopDrawing();
   state.pointer = null;
@@ -1979,6 +2003,8 @@ window.__play = () => {};
 window.__APP_STATS__ = () => ({
   gridVertices: N * N,
   gridResolution: N,
+  sampleSpacingMeters: mapExtentMeters() / (N - 1),
+  brushDiameterMeters: state.brush,
   mapSizeKm: state.mapSize,
   mapExtentMeters: mapExtentMeters(),
   baseScale: state.scale,
@@ -2077,8 +2103,8 @@ initShortcuts({
   'toggle-topo': () => setTopo(!state.topo),
   'toggle-rain': () => rainSimulation?.toggle(),
   'new-terrain': () => toggleNewTerrainMenu(),
-  'brush-smaller': () => setBrushSize(state.brush - 2),
-  'brush-larger': () => setBrushSize(state.brush + 2),
+  'brush-smaller': () => setBrushSize(Math.min(state.brush - 5, state.brush * .9)),
+  'brush-larger': () => setBrushSize(Math.max(state.brush + 5, state.brush * 1.1)),
   'strength-down': () => setStrength(state.strength - 2),
   'strength-up': () => setStrength(state.strength + 2),
   'zoom-in': () => stepMapZoom(1),
@@ -2118,7 +2144,8 @@ function collectProject() {
     heights,
     mapSize: state.mapSize,
     settings: {
-      brush: state.brush,
+      localSpacing: state.localSpacing,
+      brushMeters: state.brush,
       strength: state.strength,
       topo: state.topo,
       interval: state.interval,
@@ -2139,11 +2166,13 @@ function flashSaved() {
 }
 
 function restoreProject(saved) {
-  if (MAP_GRID_SIZES[saved.mapSize] ** 2 !== saved.heights.length) return false;
-  if (saved.mapSize !== state.mapSize) setMapSize(saved.mapSize, saved.heights);
-  else heights.set(saved.heights);
   const settings = saved.settings || {};
-  if (settings.brush) setBrushSize(settings.brush);
+  const spacing = [5, 10].includes(settings.localSpacing) ? settings.localSpacing : state.localSpacing;
+  if (gridResolution(saved.mapSize, spacing) ** 2 !== saved.heights.length) return false;
+  if (saved.mapSize !== state.mapSize || spacing !== state.localSpacing) setMapSize(saved.mapSize, saved.heights, spacing);
+  else heights.set(saved.heights);
+  // Older saves stored the brush as a percentage (`brush`); only metre values are restored.
+  if (settings.brushMeters) setBrushSize(settings.brushMeters);
   if (settings.strength) setStrength(settings.strength);
   if ([25000, 50000, 100000].includes(settings.scale)) {
     state.scale = settings.scale;
@@ -2174,6 +2203,7 @@ function startFresh() {
   showToast('התחלתם משטח חדש. אפשר לבטל ולחזור לפני השטח הקודמים.', { action: { label: 'ביטול', run: undo } });
 }
 
+syncDetailControls(); // brush limits must match the map before saved settings are applied
 const launchParams = new URLSearchParams(location.search);
 const savedProject = launchParams.has('fresh') ? null : loadProject();
 const restored = savedProject ? restoreProject(savedProject) : false;
@@ -2183,6 +2213,7 @@ if (restored) {
 }
 window.__TOPOLAB_CLEAR_SAVE__ = clearProject;
 
+syncDetailControls();
 syncToolUI();
 updateHistoryButtons();
 updateMapReferenceScale();

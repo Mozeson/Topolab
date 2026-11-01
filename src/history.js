@@ -1,11 +1,12 @@
 // Undo / redo history for terrain edits.
-// Each entry is a full snapshot ({ heights: Float32Array, mapSize }) — cheap enough
+// Each entry is a full snapshot ({ heights: Float32Array, mapSize, localSpacing }) — cheap enough
 // at our grid sizes (max 192² floats ≈ 147 KB) and immune to drift bugs.
 export function createHistory({ limit = 60, onChange = () => {} } = {}) {
   const undoStack = [];
   const redoStack = [];
 
-  const snapshot = (entry) => ({ heights: new Float32Array(entry.heights), mapSize: entry.mapSize });
+  // Extra fields (mapSize, localSpacing…) are copied as-is; heights are deep-copied.
+  const snapshot = (entry) => ({ ...entry, heights: new Float32Array(entry.heights) });
 
   function push(current) {
     undoStack.push(snapshot(current));

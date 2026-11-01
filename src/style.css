@@ -235,6 +235,7 @@ body.resizing-panels { user-select: none; cursor: col-resize; }
 .footer-control { display: flex; align-items: center; gap: 6px; color: var(--ink-soft); font-size: 11px; white-space: nowrap; }
 .footer-control select { direction: ltr; }
 .map-legend { display: flex; align-items: center; gap: 6px; color: var(--ink-soft); font-size: 10px; }
+#brushValue { min-width: 54px; }
 .legend-ramp { width: 80px; height: 7px; border-radius: 5px; background: linear-gradient(90deg, #5c9185, #74a165, #c3bd76, #b8794e, #e0c5a0); }
 .scale-help { position: relative; color: var(--ink-soft); font-size: 11px; }
 .scale-help summary { width: 22px; height: 22px; display: grid; place-items: center; border: 1px solid var(--line-strong); border-radius: 50%; font-weight: 700; list-style: none; }

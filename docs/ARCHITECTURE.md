@@ -10,6 +10,7 @@ index.html ── src/style.css
      │
      └── src/scene.js  (נקודת הכניסה: מצב, ציור המפה, סצנת Three.js, חיבור הממשק)
            ├── brush.js            מתמטיקת המברשת (טהור, עם בדיקות)
+           ├── terrain-grid.js     רזולוציית הרשת לכל גודל מפה, רדיוס מברשת בתאים, דגימה מחדש (טהור, עם בדיקות)
            ├── history.js          ביטול/חזרה (טהור, עם בדיקות)
            ├── persistence.js      שמירה אוטומטית (קידוד טהור + localStorage)
            ├── shortcuts.js        טבלת קיצורים + handler גלובלי
@@ -31,11 +32,12 @@ index.html ── src/style.css
 | משתנה | תוכן |
 |---|---|
 | `heights: Float32Array(N*N)` | הגובה במטרים לכל תא ברשת. הטווח: `MIN_HEIGHT..MAX_HEIGHT` (‎-100..200) |
-| `N`, `WORLD_SIZE` | גודל הרשת לפי `MAP_GRID_SIZES` (4 ק"מ → 96, 6 → 144, 8 → 192) |
+| `N`, `WORLD_SIZE` | גודל הרשת לפי `gridResolution(mapSize, localSpacing)`: ‏1 ק"מ → 201/101 (5/10 מ׳), 4 → 96, 6 → 144, 8 → 192 |
+| `state.localSpacing` | מרווח הדגימה במפה של 1 ק"מ (5 או 10) |
 | `state.tool` | `'raise' \| 'lower' \| 'smooth' \| 'pan' \| 'features'` |
 | `state.strokeTool` | הכלי בפועל במשיכה הנוכחית (אחרי Alt/Shift) |
 | `state.tempPan` | רווח מוחזק |
-| `state.brush`, `state.strength` | גודל המברשת (אחוז מרוחב המפה) ועוצמה (מטר לשנייה) |
+| `state.brush`, `state.strength` | קוטר המברשת **במטרים** ועוצמה (מטר לשנייה). הרדיוס בתאים מחושב ב-`brushRadiusCells()` |
 | `state.topo`, `state.interval`, `state.scale`, `state.exaggeration` | הגדרות תצוגה |
 | `state.mapView` | זום והזזה של המפה הדו־ממדית (תצוגה בלבד) |
 | `state.observer`, `state.exercise` | תצפית ותרגיל |
@@ -54,7 +56,7 @@ pointer / מקלדת
                  └─► drawMap()                   raster/קווי גובה, גשם, תכסית, כבשה, אדם, מברשת
 ```
 
-- **לפני** כל שינוי שאפשר לבטל: `pushUndo()`. הפונקציה שומרת snapshot ומתזמנת שמירה אוטומטית.
+- **לפני** כל שינוי שאפשר לבטל: `pushUndo()`. הפונקציה שומרת snapshot (`currentSnapshot()`: גבהים, `mapSize`, `localSpacing`) ומתזמנת שמירה אוטומטית.
 - משיכת מברשת שלמה היא צעד אחד בהיסטוריה (`pushUndo` ב-`pointerdown`).
 - בסוף משיכה, `stopDrawing()` קורא ל-`scheduleSave()`.
 
@@ -63,7 +65,8 @@ pointer / מקלדת
 | נושא | פונקציות ב-`scene.js` |
 |---|---|
 | כלים | `setTool(tool)` (מצב + צד־אפקטים), `syncToolUI()` (רק תצוגה) |
-| מברשת | `setBrushSize(v)`, `setStrength(v)` (מעדכנים את הסליידר, את ה-output ואת השמירה) |
+| מברשת | `setBrushSize(m)`, `setStrength(v)` (מעדכנים את הסליידר, את ה-output ואת השמירה) |
+| גודל מפה ופירוט | `setMapSize(km, restoredHeights?, localSpacing?)`, `syncDetailControls()` (גבולות המברשת, בורר הפירוט, שדה הגאיות) |
 | תצוגה | `setTopo(bool)` |
 | היסטוריה | `pushUndo()`, `undo()`, `redo()`, `restoreSnapshot()`, `updateHistoryButtons()` |
 | הודעות | `showToast(msg, true)` לשגיאה, `showToast(msg, { action: { label, run } })` עם כפתור |
@@ -101,6 +104,6 @@ showToast('תיאור קצר.', { action: { label: 'ביטול', run: undo } });
 
 ## בדיקות
 
-- `npm test`: בדיקות `node:test` בתיקייה `tests/`. הן מכסות את המודולים הטהורים: `terrain-generator`, `hydrology`, `history`, `brush`, `persistence`, `shortcuts`.
+- `npm test`: בדיקות `node:test` בתיקייה `tests/`. הן מכסות את המודולים הטהורים: `terrain-generator`, `terrain-grid`, `hydrology`, `history`, `brush`, `persistence`, `shortcuts`.
 - `scripts/verify-content.mjs`: בדיקה ויזואלית ב-Chrome headless (רינדור, שגיאות, צילומי מסך). הפלט נכתב ל-`verification-shots/`; צריך למחוק אותו לפני commit.
 - `window.__APP_STATS__()` חושף מצב לבדיקות אוטומטיות בדפדפן (Playwright). `?fresh` מונע טעינה של שמירה קודמת.

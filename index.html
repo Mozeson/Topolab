@@ -186,10 +186,10 @@
             <div class="options-bar" id="optionsBar" aria-label="אפשרויות הכלי">
               <div class="options-group" id="sculptOptions">
                 <span class="options-tool" id="toolMode">הגבהה</span>
-                <label class="inline-range" for="brushRange" title="גודל המברשת ([ / ])">
-                  <span>גודל</span>
-                  <input id="brushRange" type="range" min="4" max="48" value="24" step="1">
-                  <output id="brushValue" for="brushRange">24</output>
+                <label class="inline-range" for="brushRange" title="קוטר המברשת במטרים ([ / ])">
+                  <span>קוטר</span>
+                  <input id="brushRange" type="range" min="170" max="4000" value="1920" step="5">
+                  <output id="brushValue" for="brushRange">1.92 ק״מ</output>
                 </label>
                 <label class="inline-range" for="strengthRange" title="קצב שינוי הגובה במרכז המברשת (Shift+[ / Shift+])">
                   <span>עוצמה</span>
@@ -252,7 +252,7 @@
                   <option value="100000">1:100,000</option>
                 </select>
               </label>
-              <label class="footer-control" for="intervalSelect" id="intervalControl" hidden>קווי גובה כל
+              <label class="footer-control" for="intervalSelect" id="intervalControl" hidden>קו גובה כל
                 <select id="intervalSelect">
                   <option value="5">5 מ׳</option>
                   <option value="10" selected>10 מ׳</option>
@@ -261,14 +261,21 @@
               </label>
               <label class="footer-control" for="mapSizeSelect">גודל שטח
                 <select id="mapSizeSelect">
+                  <option value="1">1×1 ק״מ</option>
                   <option value="4" selected>4×4 ק״מ</option>
                   <option value="6">6×6 ק״מ</option>
                   <option value="8">8×8 ק״מ</option>
                 </select>
               </label>
+              <label class="footer-control" for="detailSelect" id="detailControl" hidden title="מרווח בין נקודות הגובה: 5 מ׳ מפורט יותר, 10 מ׳ קל יותר למחשב">דגימה כל
+                <select id="detailSelect">
+                  <option value="5">5 מ׳</option>
+                  <option value="10">10 מ׳</option>
+                </select>
+              </label>
               <details class="scale-help">
                 <summary aria-label="הסבר על קנה המידה והזום" title="על קנה המידה והזום">?</summary>
-                <p id="printScaleHelp">קנה המידה קובע את המרחק האמיתי של המשבצות: ב־1:25,000 כל משבצת מייצגת 500 מ׳, ב־1:50,000 היא מייצגת 1 ק״מ, וב־1:100,000 היא מייצגת 2 ק״מ. הזום רק מקרב או מרחיק את התצוגה: השטח, הקואורדינטות והגבהים אינם משתנים.</p>
+                <p id="printScaleHelp">קנה המידה קובע את המרחק האמיתי של המשבצות: ב־1:25,000 כל משבצת מייצגת 500 מ׳, ב־1:50,000 היא מייצגת 1 ק״מ, וב־1:100,000 היא מייצגת 2 ק״מ. במפה קטנה, משבצת לא תהיה גדולה מצלע המפה. הזום רק מקרב או מרחיק את התצוגה: השטח, הקואורדינטות והגבהים אינם משתנים.</p>
               </details>
               <div class="map-legend" id="mapLegend" aria-label="מקרא גובה">
                 <span>נמוך</span><div class="legend-ramp"></div><span>גבוה</span>
@@ -302,6 +309,10 @@
             <label for="terrain-variation">שונות וגודל ההרים <output id="terrain-variation-value">60</output></label><input id="terrain-variation" type="range" min="0" max="100" value="60">
             <label for="terrain-detail">חספוס ופרטים קטנים <output id="terrain-detail-value">35</output></label><input id="terrain-detail" type="range" min="0" max="100" value="35">
             <label for="terrain-valleys">עומק הגאיות <output id="terrain-valleys-value">40</output></label><input id="terrain-valleys" type="range" min="0" max="100" value="40">
+            <div id="localGullyControl" hidden>
+              <label for="terrain-gullyWidth">רוחב גאיות מקומיים <output id="terrain-gullyWidth-value">80 מ׳</output></label><input id="terrain-gullyWidth" type="range" min="40" max="200" step="5" value="80">
+              <p class="popover-note">במפה של 1 ק״מ בלבד. הרוחב נמדד בחצי העומק; העומק נשלט ב„עומק הגאיות”.</p>
+            </div>
             <label for="terrainSeed">מספר מפה (לשחזור)</label><input id="terrainSeed" type="number" min="0" max="4294967295" step="1" required>
             <p class="popover-note">אותו מספר ואותן הגדרות יוצרים את אותו תבליט.</p>
             <button class="footer-button" id="generateTerrainBtn" type="button">יצירה לפי ההגדרות</button>
