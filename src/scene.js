@@ -5,6 +5,10 @@ import { initNavigation } from './nav.js';
 import { createMapFeatures } from './map-features.js';
 import { createRainSimulation } from './rain.js';
 import { createPdfPreviewController } from './pdf-preview.js';
+import { createHistory } from './history.js';
+import { applyHeightBrush, applySmoothBrush, slopePercent, SCULPT_TOOLS } from './brush.js';
+import { createAutosave, loadProject, clearProject } from './persistence.js';
+import { initShortcuts, SHORTCUTS, HOLD_HINTS, shortcutLabel } from './shortcuts.js';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { contours } from 'd3-contour';
@@ -21,8 +25,11 @@ const BASE_Y = -4.15;
 const EYE_HEIGHT_METERS = 1.7;
 const OBSERVER_FOV = 65;
 let heights = new Float32Array(N * N);
+const TOOL_LABELS = { raise: 'הגבהה', lower: 'הנמכה', smooth: 'החלקה', pan: 'הזזת מפה', features: 'תכסית' };
 const state = {
-  tool: 1,
+  tool: 'raise',          // 'raise' | 'lower' | 'smooth' | 'pan' | 'features'
+  tempPan: false,         // space held over the map
+  lastFeatureType: 'trail',
   mapSize: 4,
   brush: 24,
   strength: 14,
@@ -32,7 +39,6 @@ const state = {
   scale: 25000,
   exaggeration: 1.6,
   mapView: { zoom: 1, panX: 0, panY: 0 },
-  panMode: false,
   pointer: null,
   drawing: false,
   observerDrag: null,
@@ -41,7 +47,8 @@ const state = {
   exerciseBackup: null,
 };
 
-const undoStack = [];
+const history = createHistory({ limit: 60, onChange: () => updateHistoryButtons() });
+let autosave = null;
 let updateQueued = false;
 let holdTimer = null;
 let lastStamp = null;
@@ -311,7 +318,6 @@ function updateMapViewUI() {
   const zoomPct = Math.round(state.mapView.zoom * 100);
   const scale = `1:${state.scale.toLocaleString('en-US')}`;
   $('mapViewLabel').textContent = `קנה מידה ${scale} · זום ${zoomPct}%`;
-  $('scaleNote').textContent = `קנה מידה בסיסי ${scale} · זום תצוגה ${zoomPct}%`;
   $('mapZoomOutBtn').disabled = state.mapView.zoom <= MAP_ZOOM_LEVELS[0];
   $('mapZoomInBtn').disabled = state.mapView.zoom >= MAP_ZOOM_LEVELS[MAP_ZOOM_LEVELS.length - 1];
   $('centerMapBtn').disabled = state.mapView.zoom === 1 && state.mapView.panX === 0 && state.mapView.panY === 0;
@@ -356,19 +362,16 @@ function resetMapView(showMessage = true) {
   if (showMessage) showToast('המפה כולה מוצגת. קנה המידה ונתוני השטח לא השתנו.');
 }
 
-function setPanMode(enabled) {
-  stopDrawing();
-  if (enabled) mapFeatures?.cancel(true);
-  state.panMode = enabled;
-  const button = $('panMapBtn');
-  button.classList.toggle('active', enabled);
-  button.setAttribute('aria-pressed', String(enabled));
-  mapCanvas.classList.toggle('pan-mode', enabled);
-  if (enabled) {
-    state.observer.placing = false;
-    sheepGame?.cancelPlacement?.();
-    updateObserverUI();
-  }
+function refreshPanCursor() {
+  mapCanvas.classList.toggle('pan-mode', isPanning());
+}
+
+function setTempPan(enabled) {
+  if (state.tempPan === enabled) return;
+  state.tempPan = enabled;
+  if (enabled) stopDrawing();
+  refreshPanCursor();
+  drawMap();
 }
 
 function updateMapScaleText() {
@@ -433,8 +436,16 @@ function drawGridLabels(ctx, w, h, dpr) {
   ctx.restore();
 }
 
+function isPanning() {
+  return state.tool === 'pan' || state.tempPan;
+}
+
+function isSculptTool(tool = state.tool) {
+  return SCULPT_TOOLS.includes(tool);
+}
+
 function drawBrush() {
-  if (!state.pointer) return;
+  if (!state.pointer || !isSculptTool() || isPanning()) return;
   const { gx, gy } = state.pointer;
   const x = (gx / (N - 1)) * mapCanvas.width;
   const y = (gy / (N - 1)) * mapCanvas.height;
@@ -442,7 +453,8 @@ function drawBrush() {
   mapCtx.save();
   mapCtx.beginPath();
   mapCtx.arc(x, y, radius, 0, Math.PI * 2);
-  mapCtx.fillStyle = state.tool > 0 ? 'rgba(238,248,217,.12)' : 'rgba(238,184,151,.13)';
+  const effective = state.drawing ? state.strokeTool || state.tool : state.tool;
+  mapCtx.fillStyle = effective === 'raise' ? 'rgba(238,248,217,.12)' : effective === 'lower' ? 'rgba(238,184,151,.13)' : 'rgba(190,220,232,.14)';
   mapCtx.fill();
   mapCtx.lineWidth = 1.6 * mapDpr;
   mapCtx.strokeStyle = 'rgba(255,255,244,.94)';
@@ -927,6 +939,46 @@ function updateTerrain() {
   sheepGame?.update3D();
   mapFeatures?.terrainChanged();
   rainSimulation?.update3D();
+  updateBrushRing();
+  needsRender = true;
+}
+
+// ——— 3D brush preview: a ring draped over the terrain under the map cursor ———
+const BRUSH_RING_SEGMENTS = 72;
+const BRUSH_RING_COLORS = { raise: 0xfffbe8, lower: 0xffc49e, smooth: 0xbfe6f5 };
+let brushRing = null;
+
+function updateBrushRing() {
+  if (!scene) return;
+  if (!brushRing) {
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(BRUSH_RING_SEGMENTS * 3), 3).setUsage(THREE.DynamicDrawUsage));
+    brushRing = new THREE.LineLoop(geometry, new THREE.LineBasicMaterial({ color: BRUSH_RING_COLORS.raise, transparent: true, opacity: .95, depthTest: false }));
+    brushRing.renderOrder = 10;
+    brushRing.frustumCulled = false;
+    brushRing.visible = false;
+    scene.add(brushRing);
+  }
+  const visible = Boolean(state.pointer) && isSculptTool() && !isPanning() && !state.observer.firstPerson && !state.observer.placing;
+  if (brushRing.visible !== visible) needsRender = true;
+  brushRing.visible = visible;
+  if (!visible) return;
+  const tool = state.drawing ? state.strokeTool || state.tool : state.tool;
+  brushRing.material.color.setHex(BRUSH_RING_COLORS[tool] || BRUSH_RING_COLORS.raise);
+  const cu = state.pointer.gx / (N - 1);
+  const cv = state.pointer.gy / (N - 1);
+  const radius = state.brush / 100 * N / (N - 1);
+  const vertical = metersToWorld() * state.exaggeration;
+  const positions = brushRing.geometry.attributes.position.array;
+  for (let i = 0; i < BRUSH_RING_SEGMENTS; i++) {
+    const angle = i / BRUSH_RING_SEGMENTS * Math.PI * 2;
+    const u = clamp(cu + Math.cos(angle) * radius, 0, 1);
+    const v = clamp(cv + Math.sin(angle) * radius, 0, 1);
+    positions[i * 3] = (u - .5) * WORLD_SIZE;
+    positions[i * 3 + 1] = sampleHeight(u, v) * vertical + .03;
+    positions[i * 3 + 2] = (v - .5) * WORLD_SIZE;
+  }
+  brushRing.geometry.attributes.position.needsUpdate = true;
   needsRender = true;
 }
 
@@ -1135,8 +1187,7 @@ function setMapSize(newSize, restoredHeights = null) {
   state.mapView.panY = 0;
   lastStamp = null;
   $('mapSizeSelect').value = String(newSize);
-  const center = Math.floor((N - 1) / 2);
-  $('pointHeight').textContent = `${Math.round(heights[center * N + center])} מ׳`;
+  hideCursorReadout();
 
   rebuildPerimeter();
   raster.width = N;
@@ -1171,7 +1222,6 @@ function setMapSize(newSize, restoredHeights = null) {
 function updateReadouts() {
   const { max } = terrainStats();
   $('maxHeight').textContent = `שיא ${Math.round(max)} מ׳`;
-  $('undoBtn').disabled = undoStack.length === 0;
   if (state.exercise) {
     const lines = countPositiveContourLevels();
     const complete = (max >= 60 ? 1 : 0) + (lines >= 3 ? 1 : 0);
@@ -1190,38 +1240,104 @@ function scheduleUpdate() {
   });
 }
 
+// ——— History (undo / redo) ———
 function pushUndo() {
-  undoStack.push({ heights: new Float32Array(heights), mapSize: state.mapSize });
-  if (undoStack.length > 24) undoStack.shift();
-  $('undoBtn').disabled = false;
+  history.push({ heights, mapSize: state.mapSize });
+  scheduleSave();
 }
 
+function restoreSnapshot(snapshot) {
+  rainSimulation?.stop();
+  stopDrawing();
+  if (snapshot.mapSize !== state.mapSize) setMapSize(snapshot.mapSize, snapshot.heights);
+  else heights.set(snapshot.heights);
+  scheduleUpdate();
+  scheduleSave();
+}
+
+function undo() {
+  const previous = history.undo({ heights, mapSize: state.mapSize });
+  if (!previous) { showToast('אין פעולה לבטל.'); return; }
+  restoreSnapshot(previous);
+  showToast('הפעולה האחרונה בוטלה.', { action: { label: 'חזרה', run: redo } });
+}
+
+function redo() {
+  const next = history.redo({ heights, mapSize: state.mapSize });
+  if (!next) { showToast('אין פעולה לחזור אליה.'); return; }
+  restoreSnapshot(next);
+  showToast('הפעולה שוחזרה.', { action: { label: 'ביטול', run: undo } });
+}
+
+function updateHistoryButtons() {
+  $('undoBtn').disabled = !history.canUndo;
+  $('redoBtn').disabled = !history.canRedo;
+}
+
+// ——— Tools ———
+// One active tool at a time. Sculpt tools share the brush options; 'pan' and
+// 'features' show their own options group. See docs/ARCHITECTURE.md → "Adding a tool".
 function setTool(tool) {
-  if (state.panMode) setPanMode(false);
-  mapFeatures?.cancel(true);
+  if (!TOOL_LABELS[tool]) return;
+  stopDrawing();
+  const previous = state.tool;
   state.tool = tool;
-  const raising = tool > 0;
-  $('raiseBtn').classList.toggle('active', raising);
-  $('raiseBtn').setAttribute('aria-pressed', String(raising));
-  $('lowerBtn').classList.toggle('active', !raising);
-  $('lowerBtn').setAttribute('aria-pressed', String(!raising));
-  $('toolMode').textContent = raising ? 'הגבהה' : 'הנמכה';
+  if (tool !== 'features' && previous === 'features') mapFeatures?.cancel(true);
+  if (tool === 'pan' || tool === 'features') {
+    state.observer.placing = false;
+    sheepGame?.cancelPlacement?.();
+    updateObserverUI();
+  }
+  if (tool === 'features' && mapFeatures && !mapFeatures.active) mapFeatures.activate(state.lastFeatureType);
+  syncToolUI();
+}
+
+function syncToolUI() {
+  const tool = state.tool;
+  for (const button of document.querySelectorAll('.rail-tool[data-tool]')) {
+    const active = button.dataset.tool === tool;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', String(active));
+  }
+  $('sculptOptions').hidden = !isSculptTool(tool);
+  $('panOptions').hidden = tool !== 'pan';
+  $('featureOptions').hidden = tool !== 'features';
+  const label = $('toolMode');
+  label.textContent = TOOL_LABELS[tool];
+  label.className = `options-tool ${tool}`;
+  refreshPanCursor();
+  updateBrushRing();
   drawMap();
+}
+
+function setBrushSize(value) {
+  state.brush = clamp(Math.round(value), Number($('brushRange').min), Number($('brushRange').max));
+  $('brushRange').value = String(state.brush);
+  $('brushValue').value = String(state.brush);
+  updateBrushRing();
+  drawMap();
+  scheduleSave();
+}
+
+function setStrength(value) {
+  state.strength = clamp(Math.round(value / 2) * 2, Number($('strengthRange').min), Number($('strengthRange').max));
+  $('strengthRange').value = String(state.strength);
+  $('strengthValue').value = `${state.strength} מ׳/ש׳`;
+  scheduleSave();
 }
 
 function setTopo(enabled) {
   state.topo = enabled;
-  $('topoBtn').setAttribute('aria-pressed', String(enabled));
-  $('topoBtn').querySelector('span').textContent = enabled ? 'חזרה למצב פיסול' : 'הצג מפה טופוגרפית';
-  $('mapKicker').textContent = enabled ? 'קריאת המפה' : 'משטח עריכה';
+  $('topoBtn').setAttribute('aria-checked', String(enabled));
+  $('sculptViewBtn').setAttribute('aria-checked', String(!enabled));  $('mapKicker').textContent = enabled ? 'קריאת המפה' : 'משטח עריכה';
   $('mapTitle').textContent = enabled ? 'מפה טופוגרפית' : 'מבט מלמעלה';
-  $('mapModeLabel').textContent = enabled ? `קו גובה כל ${state.interval} מ׳` : 'גובה 0 מ׳';
   document.querySelector('.map-panel').classList.toggle('topographic', enabled);
   $('intervalControl').hidden = !enabled;
   $('mapLegend').hidden = enabled;
   updateMapScaleText();
   updateTerrain();
   drawMap();
+  scheduleSave();
 }
 
 function clearHeights(record = true) {
@@ -1229,7 +1345,7 @@ function clearHeights(record = true) {
   if (record) pushUndo();
   heights.fill(0);
   state.pointer = null;
-  $('pointHeight').textContent = '0 מ׳';
+  hideCursorReadout();
   scheduleUpdate();
 }
 
@@ -1250,7 +1366,7 @@ function applyPreset(name) {
     }
   }
   scheduleUpdate();
-  showToast({ hill: 'גבעה', ridge: 'רכס', valley: 'עמק', crater: 'מכתש' }[name] + ' נוספה למשטח. אפשר להמשיך ולפסל.');
+  showToast({ hill: 'גבעה', ridge: 'רכס', valley: 'עמק', crater: 'מכתש' }[name] + ' נוספה למשטח. אפשר להמשיך ולפסל.', { action: { label: 'ביטול', run: undo } });
 }
 
 function applyRandomTerrain(newSeed = false) {
@@ -1271,32 +1387,35 @@ function applyRandomTerrain(newSeed = false) {
   lastRandomTerrain = options;
   state.pointer = null;
   scheduleUpdate();
-  showToast('נוצרה מפה אקראית. אפשר לשנות את ההגדרות, ליצור שוב או להמשיך לפסל.');
+  showToast('נוצרה מפה אקראית. אפשר להגריל שוב או להמשיך לפסל.', { action: { label: 'ביטול', run: undo } });
 }
 
-function applyBrush(gx, gy, amount) {
+// `seconds` is how long the brush acted; strength is metres per second at the centre.
+function applyBrush(gx, gy, seconds, tool = state.tool) {
   const radius = state.brush / 100 * N;
-  const minX = Math.max(0, Math.floor(gx - radius));
-  const maxX = Math.min(N - 1, Math.ceil(gx + radius));
-  const minY = Math.max(0, Math.floor(gy - radius));
-  const maxY = Math.min(N - 1, Math.ceil(gy + radius));
-  for (let y = minY; y <= maxY; y++) {
-    for (let x = minX; x <= maxX; x++) {
-      const d = Math.hypot(x - gx, y - gy) / radius;
-      if (d >= 1) continue;
-      const falloff = (1 - d * d) ** 2;
-      const i = y * N + x;
-      heights[i] = clamp(heights[i] + amount * falloff, MIN_HEIGHT, MAX_HEIGHT);
-    }
+  if (tool === 'smooth') {
+    // Smoothing rate scales with strength so the slider means the same thing for every tool.
+    applySmoothBrush(heights, N, gx, gy, radius, state.strength * seconds * .35);
+  } else {
+    const sign = tool === 'lower' ? -1 : 1;
+    applyHeightBrush(heights, N, gx, gy, radius, sign * state.strength * seconds, MIN_HEIGHT, MAX_HEIGHT);
   }
   scheduleUpdate();
+}
+
+// Alt flips raise/lower, Shift smooths — read from the pointer event so no key tracking is needed.
+function strokeToolFor(event) {
+  if (event?.shiftKey) return 'smooth';
+  if (event?.altKey && state.tool === 'raise') return 'lower';
+  if (event?.altKey && state.tool === 'lower') return 'raise';
+  return state.tool;
 }
 
 function applyTimedBrush(gx, gy) {
   const now = performance.now();
   const elapsed = clamp((now - lastBrushTime) / 1000, 0, .15);
   lastBrushTime = now;
-  applyBrush(gx, gy, state.tool * state.strength * elapsed);
+  applyBrush(gx, gy, elapsed, state.strokeTool || state.tool);
 }
 
 function eventToGrid(event) {
@@ -1307,10 +1426,40 @@ function eventToGrid(event) {
   };
 }
 
-function updatePointReadout(pointer) {
+// ——— Cursor readout: height (and slope) next to the pointer ———
+const cursorReadout = $('cursorReadout');
+let lastReadoutClient = null;
+
+function hideCursorReadout() {
+  cursorReadout.hidden = true;
+  lastReadoutClient = null;
+}
+
+function updatePointReadout(pointer, event = null) {
   const x = Math.round(pointer.gx);
   const y = Math.round(pointer.gy);
-  $('pointHeight').textContent = `${Math.round(heights[y * N + x])} מ׳`;
+  const height = Math.round(heights[y * N + x]);
+  const slope = slopePercent(heights, N, pointer.gx, pointer.gy, mapExtentMeters() / (N - 1));
+  cursorReadout.textContent = `${height} מ׳ · שיפוע ${slope < 1 ? slope.toFixed(1) : Math.round(slope)}%`;
+  const wrapRect = $('mapWrap').getBoundingClientRect();
+  let clientX;
+  let clientY;
+  if (event && 'clientX' in event) {
+    clientX = event.clientX;
+    clientY = event.clientY;
+    lastReadoutClient = { clientX, clientY, touch: event.pointerType === 'touch' };
+  } else {
+    const rect = mapCanvas.getBoundingClientRect();
+    clientX = rect.left + pointer.gx / (N - 1) * rect.width;
+    clientY = rect.top + pointer.gy / (N - 1) * rect.height;
+  }
+  // Fingers hide whatever is under them, so on touch the label sits higher.
+  const lift = lastReadoutClient?.touch ? 56 : 18;
+  const left = clamp(clientX - wrapRect.left + 16, 4, Math.max(4, wrapRect.width - cursorReadout.offsetWidth - 4));
+  const top = clamp(clientY - wrapRect.top - lift - 10, 4, Math.max(4, wrapRect.height - 28));
+  cursorReadout.style.transform = `translate(${left}px, ${top}px)`;
+  cursorReadout.hidden = false;
+  updateBrushRing();
 }
 
 function stopDrawing(event) {
@@ -1322,6 +1471,8 @@ function stopDrawing(event) {
   state.observerDrag = null;
   if (state.drawing) {
     state.drawing = false;
+    state.strokeTool = null;
+    scheduleSave();
     lastStamp = null;
     clearInterval(holdTimer);
     holdTimer = null;
@@ -1329,33 +1480,55 @@ function stopDrawing(event) {
   if (event && mapCanvas.hasPointerCapture(event.pointerId)) mapCanvas.releasePointerCapture(event.pointerId);
 }
 
+// Last known mouse position, used by hold-Space panning. (pointerenter/leave are unreliable
+// around pointer capture, so containment is checked against the map's rectangle instead.)
+let lastMouse = null;
+document.addEventListener('pointermove', (event) => {
+  if (event.pointerType === 'mouse') lastMouse = { x: event.clientX, y: event.clientY };
+}, { capture: true, passive: true });
+function mouseIsOverMap() {
+  if (!lastMouse) return false;
+  const rect = $('mapWrap').getBoundingClientRect();
+  return lastMouse.x >= rect.left && lastMouse.x <= rect.right && lastMouse.y >= rect.top && lastMouse.y <= rect.bottom;
+}
+
+function startPanDrag(event) {
+  event.preventDefault();
+  mapPanDrag = {
+    pointerId: event.pointerId,
+    clientX: event.clientX,
+    clientY: event.clientY,
+    panX: state.mapView.panX,
+    panY: state.mapView.panY,
+  };
+  mapCanvas.setPointerCapture(event.pointerId);
+  mapCanvas.classList.add('is-panning');
+  hideCursorReadout();
+}
+
 mapCanvas.addEventListener('pointerdown', (event) => {
-  const panRequested = state.panMode || (event.pointerType === 'mouse' && event.button === 1);
+  closePopovers();
+  const panRequested = isPanning() || (event.pointerType === 'mouse' && event.button === 1);
   if (panRequested) {
-    event.preventDefault();
-    mapPanDrag = {
-      pointerId: event.pointerId,
-      clientX: event.clientX,
-      clientY: event.clientY,
-      panX: state.mapView.panX,
-      panY: state.mapView.panY,
-    };
-    mapCanvas.setPointerCapture(event.pointerId);
-    mapCanvas.classList.add('is-panning');
+    startPanDrag(event);
     return;
   }
   if (event.button !== 0 && event.pointerType === 'mouse') return;
   event.preventDefault();
+  mapCanvas.focus({ preventScroll: true });
   const next = eventToGrid(event);
-  if (mapFeatures?.handlePointerDown(next.gx, next.gy)) {
-    state.pointer = next;
-    updatePointReadout(next);
+  if (state.tool === 'features') {
+    if (mapFeatures && !mapFeatures.active) mapFeatures.activate(state.lastFeatureType);
+    if (mapFeatures?.handlePointerDown(next.gx, next.gy)) {
+      state.pointer = next;
+      updatePointReadout(next, event);
+    }
     return;
   }
   if (sheepGame?.place(next.gx / (N - 1), next.gy / (N - 1))) return;
   if (state.observer.placing) {
     state.pointer = next;
-    updatePointReadout(next);
+    updatePointReadout(next, event);
     enterObserver(next.gx / (N - 1), next.gy / (N - 1));
     showToast('האדם הוצב. גררו אותו לשינוי מיקום, או את קצה החץ לשינוי כיוון.');
     return;
@@ -1368,15 +1541,17 @@ mapCanvas.addEventListener('pointerdown', (event) => {
     drawMap();
     return;
   }
+  if (!isSculptTool()) return;
   rainSimulation?.stop();
   pushUndo();
   state.drawing = true;
+  state.strokeTool = strokeToolFor(event);
   state.pointer = next;
   lastStamp = { ...state.pointer };
   mapCanvas.setPointerCapture(event.pointerId);
   lastBrushTime = performance.now() - 80;
   applyTimedBrush(state.pointer.gx, state.pointer.gy);
-  updatePointReadout(state.pointer);
+  updatePointReadout(state.pointer, event);
   clearInterval(holdTimer);
   holdTimer = setInterval(() => {
     if (state.drawing && state.pointer) applyTimedBrush(state.pointer.gx, state.pointer.gy);
@@ -1396,14 +1571,19 @@ mapCanvas.addEventListener('pointermove', (event) => {
   if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) {
     stopDrawing(event);
     state.pointer = null;
-    $('pointHeight').textContent = '—';
+    hideCursorReadout();
+    updateBrushRing();
     drawMap();
     return;
   }
   const next = eventToGrid(event);
   state.pointer = next;
-  updatePointReadout(next);
-  if (mapFeatures?.handlePointerMove(next.gx, next.gy)) return;
+  if (isPanning()) {
+    hideCursorReadout();
+    return;
+  }
+  updatePointReadout(next, event);
+  if (state.tool === 'features' && mapFeatures?.handlePointerMove(next.gx, next.gy)) return;
   if (state.observerDrag) {
     if (state.observerDrag === 'move') {
       state.observer.u = clamp(next.gx / (N - 1), 0, 1);
@@ -1424,16 +1604,16 @@ mapCanvas.addEventListener('pointermove', (event) => {
     return;
   }
   if (state.drawing) {
+    state.strokeTool = strokeToolFor(event);
     const previous = lastStamp || next;
     const distance = Math.hypot(next.gx - previous.gx, next.gy - previous.gy);
     const spacing = Math.max(1.5, state.brush / 100 * N * .18);
     const steps = Math.max(1, Math.ceil(distance / spacing));
     const now = performance.now();
     const elapsed = clamp((now - lastBrushTime) / 1000, 0, .15);
-    const amount = state.tool * state.strength * elapsed / steps;
     lastBrushTime = now;
     for (let i = 1; i <= steps; i++) {
-      applyBrush(lerp(previous.gx, next.gx, i / steps), lerp(previous.gy, next.gy, i / steps), amount);
+      applyBrush(lerp(previous.gx, next.gx, i / steps), lerp(previous.gy, next.gy, i / steps), elapsed / steps, state.strokeTool);
     }
     lastStamp = { ...next };
   } else drawMap();
@@ -1442,8 +1622,9 @@ mapCanvas.addEventListener('pointermove', (event) => {
 mapCanvas.addEventListener('pointerup', stopDrawing);
 mapCanvas.addEventListener('pointercancel', stopDrawing);
 mapCanvas.addEventListener('pointerleave', (event) => {
+  if (event.pointerType !== 'touch') hideCursorReadout();
   if (state.observerDrag && event.pointerType === 'mouse') stopDrawing(event);
-  else if (!state.drawing) { state.pointer = null; drawMap(); }
+  else if (!state.drawing) { state.pointer = null; updateBrushRing(); drawMap(); }
   else if (event.pointerType === 'mouse') stopDrawing(event);
 });
 mapCanvas.addEventListener('contextmenu', (event) => event.preventDefault());
@@ -1461,17 +1642,16 @@ $('mapWrap').addEventListener('wheel', (event) => {
   wheelZoomDelta = 0;
 }, { passive: false });
 
+// Keyboard access to the map itself (focus the canvas): arrows move the brush cursor,
+// Enter applies the current tool. In pan mode the arrows move the map instead.
 mapCanvas.addEventListener('keydown', (event) => {
-  if (mapFeatures?.handleKey(event)) return;
-  if (state.panMode) {
+  if (state.tool === 'features' && mapFeatures?.handleKey(event)) return;
+  if (isPanning()) {
     const panStep = event.shiftKey ? 100 : 40;
     if (event.key === 'ArrowLeft') state.mapView.panX -= panStep;
     else if (event.key === 'ArrowRight') state.mapView.panX += panStep;
     else if (event.key === 'ArrowUp') state.mapView.panY -= panStep;
     else if (event.key === 'ArrowDown') state.mapView.panY += panStep;
-    else if (event.key === '+' || event.key === '=') { stepMapZoom(1); event.preventDefault(); return; }
-    else if (event.key === '-') { stepMapZoom(-1); event.preventDefault(); return; }
-    else if (event.key === 'Home' || event.key === '0') { resetMapView(); event.preventDefault(); return; }
     else return;
     event.preventDefault();
     applyMapSurfaceTransform();
@@ -1490,13 +1670,11 @@ mapCanvas.addEventListener('keydown', (event) => {
   else if (event.key === 'ArrowRight') current.gx += step;
   else if (event.key === 'ArrowUp') current.gy -= step;
   else if (event.key === 'ArrowDown') current.gy += step;
-  else if (event.key === ' ' || event.key === 'Enter') {
+  else if ((event.key === 'Enter' || (event.key === ' ' && !mouseIsOverMap())) && isSculptTool()) {
     event.preventDefault();
     pushUndo();
-    applyBrush(current.gx, current.gy, state.tool * state.strength * .12);
-  } else if (event.key === '+' || event.key === '=') setTool(1);
-  else if (event.key === '-') setTool(-1);
-  else return;
+    applyBrush(current.gx, current.gy, .12);
+  } else return;
   event.preventDefault();
   current.gx = clamp(current.gx, 0, N - 1);
   current.gy = clamp(current.gy, 0, N - 1);
@@ -1506,14 +1684,27 @@ mapCanvas.addEventListener('keydown', (event) => {
 });
 
 // ——— Controls and guided exercise ———
-function showToast(message, error = false) {
+// showToast(message, true) marks an error; showToast(message, { action: { label, run } })
+// adds a button — used to make destructive actions undoable instead of asking for confirmation.
+let toastAction = null;
+function showToast(message, options = false) {
+  const { error = false, action = null } = typeof options === 'object' && options ? options : { error: Boolean(options) };
   const toast = $('toast');
   clearTimeout(toastTimer);
-  toast.textContent = message;
+  $('toastMessage').textContent = message;
+  toastAction = action;
+  $('toastAction').hidden = !action;
+  if (action) $('toastAction').textContent = action.label;
   toast.classList.toggle('error', error);
   toast.hidden = false;
-  toastTimer = setTimeout(() => { toast.hidden = true; }, 3600);
+  toastTimer = setTimeout(() => { toast.hidden = true; toastAction = null; }, action ? 6000 : 3600);
 }
+$('toastAction').addEventListener('click', () => {
+  const action = toastAction;
+  $('toast').hidden = true;
+  toastAction = null;
+  action?.run();
+});
 
 function updateExercise() {
   if (!state.exercise) return;
@@ -1526,8 +1717,9 @@ function startExercise() {
   rainSimulation?.stop();
   state.exercise = true;
   $('checkExerciseBtn').textContent = 'בדיקה';
+  if (autosave) { autosave.flush(); autosave.enabled = false; }
   heights.fill(0);
-  undoStack.length = 0;
+  history.clear();
   $('exerciseStrip').hidden = false;
   $('exerciseBtn').classList.add('active');
   setTopo(true);
@@ -1544,24 +1736,27 @@ function closeExercise() {
   else heights.set(backup.heights);
   $('exerciseStrip').hidden = true;
   $('exerciseBtn').classList.remove('active');
+  history.clear();
+  if (autosave) autosave.enabled = true;
   setTopo(backup.topo);
   scheduleUpdate();
 }
 
 function closePopovers() {
-  for (const [popoverId, triggerId] of [['randomPopover', 'randomTerrainBtn'], ['brushPopover', 'brushSettingsBtn'], ['presetsPopover', 'presetsBtn'], ['featuresPopover', 'featuresBtn']]) {
-    $(popoverId).hidden = true;
-    $(triggerId).setAttribute('aria-expanded', 'false');
-  }
+  const popover = $('newTerrainPopover');
+  if (popover.hidden) return;
+  popover.hidden = true;
+  $('newTerrainBtn').setAttribute('aria-expanded', 'false');
 }
 
-function togglePopover(popoverId, triggerId) {
-  const open = $(popoverId).hidden;
+function toggleNewTerrainMenu() {
+  const popover = $('newTerrainPopover');
+  const open = popover.hidden;
   closePopovers();
-  if (open) {
-    $(popoverId).hidden = false;
-    $(triggerId).setAttribute('aria-expanded', 'true');
-  }
+  if (!open) return;
+  popover.hidden = false;
+  $('newTerrainBtn').setAttribute('aria-expanded', 'true');
+  popover.querySelector('.preset-button')?.focus();
 }
 
 function syncFullscreen(panel) {
@@ -1574,7 +1769,6 @@ function syncFullscreen(panel) {
     button.setAttribute('aria-pressed', String(active));
     button.setAttribute('aria-label', active ? 'יציאה ממסך מלא' : name === 'map' ? 'מפה במסך מלא' : 'תלת־ממד במסך מלא');
     button.title = active ? 'יציאה ממסך מלא (Esc)' : 'מסך מלא';
-    button.querySelector('span').textContent = active ? 'יציאה' : 'מסך מלא';
   }
   document.body.classList.toggle('panel-expanded', Boolean(panel));
   closePopovers();
@@ -1615,27 +1809,28 @@ $('removeObserverBtn').addEventListener('click', () => {
 
 $('focusMapBtn').addEventListener('click', () => setFocus('map'));
 $('focusSceneBtn').addEventListener('click', () => setFocus('scene'));
-$('brushSettingsBtn').addEventListener('click', () => togglePopover('brushPopover', 'brushSettingsBtn'));
-$('presetsBtn').addEventListener('click', () => togglePopover('presetsPopover', 'presetsBtn'));
-$('featuresBtn').addEventListener('click', () => togglePopover('featuresPopover', 'featuresBtn'));
-$('closeBrushBtn').addEventListener('click', closePopovers);
-$('closePresetsBtn').addEventListener('click', closePopovers);
-$('closeFeaturesBtn').addEventListener('click', closePopovers);
+$('newTerrainBtn').addEventListener('click', toggleNewTerrainMenu);
+$('closeNewTerrainBtn').addEventListener('click', () => { closePopovers(); $('newTerrainBtn').focus(); });
 document.addEventListener('pointerdown', (event) => {
-  if (!event.target.closest('.rail-popover, .rail-button')) closePopovers();
+  if (!event.target.closest('#newTerrainPopover, #newTerrainBtn, #toast')) closePopovers();
 });
 document.addEventListener('keydown', (event) => {
-  if (event.key !== 'Escape') return;
+  if (event.key !== 'Escape' || document.querySelector('dialog[open]')) return;
   sheepGame?.cancelPlacement();
-  mapFeatures?.cancel(true);
-  closePopovers();
+  if (!$('newTerrainPopover').hidden) { closePopovers(); $('newTerrainBtn').focus(); return; }
+  if (state.tool === 'features') {
+    // First Esc drops the line being drawn; a second one leaves the features tool.
+    if (mapFeatures?.drafting) mapFeatures.cancel(false);
+    else setTool('raise');
+    return;
+  }
   if (state.focus) { setFocus(state.focus); return; }
   if (state.observer.placing || state.observer.firstPerson) exitObserver();
 });
 
 $('observerBtn').addEventListener('click', () => {
   sheepGame?.cancelPlacement();
-  mapFeatures?.cancel(true);
+  if (state.tool === 'features' || state.tool === 'pan') setTool('raise');
   if (state.observer.firstPerson || state.observer.placing) {
     exitObserver();
     return;
@@ -1655,43 +1850,36 @@ $('observerTiltRange').addEventListener('input', (event) => {
   $('observerTiltValue').value = `${event.target.value}°`;
   updateObserverCamera();
 });
-$('raiseBtn').addEventListener('click', () => setTool(1));
-$('lowerBtn').addEventListener('click', () => setTool(-1));
-$('panMapBtn').addEventListener('click', () => setPanMode(!state.panMode));
+for (const button of document.querySelectorAll('.rail-tool[data-tool]')) {
+  button.addEventListener('click', () => setTool(button.dataset.tool));
+}
 $('mapZoomInBtn').addEventListener('click', () => stepMapZoom(1));
 $('mapZoomOutBtn').addEventListener('click', () => stepMapZoom(-1));
 $('centerMapBtn').addEventListener('click', () => resetMapView());
-$('randomTerrainBtn').addEventListener('click', () => togglePopover('randomPopover', 'randomTerrainBtn'));
-$('closeRandomBtn').addEventListener('click', closePopovers);
-$('generateTerrainBtn').addEventListener('click', () => applyRandomTerrain(false));
-$('newTerrainBtn').addEventListener('click', () => applyRandomTerrain(true));
+$('randomTerrainBtn').addEventListener('click', () => { applyRandomTerrain(true); closePopovers(); });
+$('generateTerrainBtn').addEventListener('click', () => { applyRandomTerrain(false); closePopovers(); });
 $('terrainSeed').value = crypto.getRandomValues(new Uint32Array(1))[0];
 for (const name of ['relief', 'variation', 'detail', 'valleys']) {
   $('terrain-' + name).addEventListener('input', (event) => {
     $('terrain-' + name + '-value').value = event.target.value;
   });
 }
-$('topoBtn').addEventListener('click', () => setTopo(!state.topo));
-$('brushRange').addEventListener('input', (event) => {
-  state.brush = Number(event.target.value);
-  $('brushValue').value = event.target.value;
-  drawMap();
-});
-$('strengthRange').addEventListener('input', (event) => {
-  state.strength = Number(event.target.value);
-  $('strengthValue').value = `${event.target.value} מ׳/ש׳`;
-});
+$('topoBtn').addEventListener('click', () => setTopo(true));
+$('sculptViewBtn').addEventListener('click', () => setTopo(false));
+$('brushRange').addEventListener('input', (event) => setBrushSize(Number(event.target.value)));
+$('strengthRange').addEventListener('input', (event) => setStrength(Number(event.target.value)));
 $('mapSizeSelect').addEventListener('change', (event) => {
   const newSize = Number(event.target.value);
   if (newSize === state.mapSize) return;
   pushUndo();
   closePopovers();
   setMapSize(newSize);
+  scheduleSave();
 });
 function updateMapReferenceScale(showMessage = false) {
   stopDrawing();
   state.pointer = null;
-  $('pointHeight').textContent = '—';
+  hideCursorReadout();
   updateMapScaleText();
   resizeMap();
   if (showMessage) {
@@ -1702,12 +1890,13 @@ function updateMapReferenceScale(showMessage = false) {
 $('scaleSelect').addEventListener('change', (event) => {
   state.scale = Number(event.target.value);
   updateMapReferenceScale(true);
+  scheduleSave();
 });
 $('intervalSelect').addEventListener('change', (event) => {
   state.interval = Number(event.target.value);
-  $('mapModeLabel').textContent = `קו גובה כל ${state.interval} מ׳`;
   updateTerrain();
   drawMap();
+  scheduleSave();
 });
 const pdfPreview = createPdfPreviewController({
   getData: () => ({
@@ -1731,18 +1920,15 @@ $('exaggerationRange').addEventListener('input', (event) => {
   state.exaggeration = Number(event.target.value);
   $('exaggerationValue').value = `×${state.exaggeration.toFixed(1)}`;
   updateTerrain();
+  updateBrushRing();
+  scheduleSave();
 });
-$('undoBtn').addEventListener('click', () => {
-  const previous = undoStack.pop();
-  if (!previous) return;
-  if (previous.mapSize !== state.mapSize) setMapSize(previous.mapSize, previous.heights);
-  else heights.set(previous.heights);
-  scheduleUpdate();
-  showToast('הפעולה האחרונה בוטלה.');
-});
+$('undoBtn').addEventListener('click', undo);
+$('redoBtn').addEventListener('click', redo);
 $('resetBtn').addEventListener('click', () => {
   clearHeights(true);
-  showToast('המשטח חזר לגובה 0 מ׳.');
+  closePopovers();
+  showToast('המשטח חזר לגובה 0 מ׳.', { action: { label: 'ביטול', run: undo } });
 });
 $('resetCameraBtn').addEventListener('click', () => {
   if (state.observer.firstPerson) exitObserver();
@@ -1835,14 +2021,20 @@ mapFeatures = createMapFeatures({
   redraw: drawMap,
   invalidate: () => { needsRender = true; },
   notify: showToast,
-  prepareDrawing: () => {
+  prepareDrawing: (type) => {
     stopDrawing();
-    setPanMode(false);
     sheepGame?.cancelPlacement();
     state.observer.placing = false;
     updateObserverUI();
     closePopovers();
+    state.lastFeatureType = type;
+    $('trailColorControl').hidden = type !== 'markedTrail';
+    if (state.tool !== 'features') {
+      state.tool = 'features';
+      syncToolUI();
+    }
   },
+  changed: () => scheduleSave(),
 });
 rainSimulation = createRainSimulation({
   scene: () => scene,
@@ -1859,6 +2051,140 @@ if (renderer) {
   renderer.domElement.addEventListener('pointerdown', () => renderer.domElement.focus());
   navigation = initNavigation(renderer.domElement, $('moveJoystick'), $('zoomJoystick'));
 }
+// ——— Keyboard shortcuts, tooltips and the shortcut list (docs/UI-GUIDE.md) ———
+const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+const keyLabel = (label) => (isMac ? label.replace('Ctrl', '⌘') : label);
+for (const element of document.querySelectorAll('[data-shortcut]')) {
+  const base = element.dataset.title || element.querySelector('span')?.textContent || element.getAttribute('aria-label') || '';
+  element.title = `${base} (${keyLabel(shortcutLabel(element.dataset.shortcut))})`;
+}
+{
+  const grouped = new Map();
+  for (const shortcut of SHORTCUTS) {
+    const entry = grouped.get(shortcut.id) || { labels: [], description: shortcut.description };
+    entry.labels.push(keyLabel(shortcut.label));
+    grouped.set(shortcut.id, entry);
+  }
+  const rows = [...grouped.values(), ...HOLD_HINTS.map((hint) => ({ labels: [hint.label], description: hint.description }))];
+  $('shortcutList').innerHTML = rows.map((row) => `<dt>${row.labels.map((label) => `<kbd>${label}</kbd>`).join(' / ')}</dt><dd>${row.description}</dd>`).join('');
+}
+initShortcuts({
+  'tool-raise': () => setTool('raise'),
+  'tool-lower': () => setTool('lower'),
+  'tool-smooth': () => setTool('smooth'),
+  'tool-pan': () => setTool('pan'),
+  'tool-features': () => setTool('features'),
+  'toggle-topo': () => setTopo(!state.topo),
+  'toggle-rain': () => rainSimulation?.toggle(),
+  'new-terrain': () => toggleNewTerrainMenu(),
+  'brush-smaller': () => setBrushSize(state.brush - 2),
+  'brush-larger': () => setBrushSize(state.brush + 2),
+  'strength-down': () => setStrength(state.strength - 2),
+  'strength-up': () => setStrength(state.strength + 2),
+  'zoom-in': () => stepMapZoom(1),
+  'zoom-out': () => stepMapZoom(-1),
+  'zoom-reset': () => resetMapView(false),
+  undo: () => undo(),
+  redo: () => redo(),
+  help: () => helpDialog.showModal(),
+});
+
+// Hold Space over the map to pan temporarily (like most drawing apps).
+document.addEventListener('keydown', (event) => {
+  if (event.code !== 'Space' || !mouseIsOverMap() || document.querySelector('dialog[open]')) return;
+  const target = event.target;
+  if (target instanceof Element && target.closest('input:not([type="range"]), select, textarea')) return;
+  event.preventDefault();
+  setTempPan(true);
+});
+document.addEventListener('keyup', (event) => {
+  if (event.code === 'Space' && state.tempPan) {
+    event.preventDefault(); // don't let a focused button treat the release as a click
+    setTempPan(false);
+  }
+  // Stop a lone Alt from moving focus to the browser menu bar on Windows.
+  if (event.key === 'Alt' && state.drawing) event.preventDefault();
+});
+addEventListener('blur', () => setTempPan(false));
+
+// ——— Autosave and restore (src/persistence.js) ———
+function scheduleSave() {
+  autosave?.schedule();
+}
+
+function collectProject() {
+  if (state.exercise) return null;
+  return {
+    heights,
+    mapSize: state.mapSize,
+    settings: {
+      brush: state.brush,
+      strength: state.strength,
+      topo: state.topo,
+      interval: state.interval,
+      scale: state.scale,
+      exaggeration: state.exaggeration,
+    },
+    features: mapFeatures?.serialize() || [],
+  };
+}
+
+let saveIndicatorTimer = null;
+function flashSaved() {
+  const indicator = $('saveIndicator');
+  indicator.textContent = 'נשמר ✓';
+  indicator.classList.add('visible');
+  clearTimeout(saveIndicatorTimer);
+  saveIndicatorTimer = setTimeout(() => indicator.classList.remove('visible'), 1600);
+}
+
+function restoreProject(saved) {
+  if (MAP_GRID_SIZES[saved.mapSize] ** 2 !== saved.heights.length) return false;
+  if (saved.mapSize !== state.mapSize) setMapSize(saved.mapSize, saved.heights);
+  else heights.set(saved.heights);
+  const settings = saved.settings || {};
+  if (settings.brush) setBrushSize(settings.brush);
+  if (settings.strength) setStrength(settings.strength);
+  if ([25000, 50000, 100000].includes(settings.scale)) {
+    state.scale = settings.scale;
+    $('scaleSelect').value = String(settings.scale);
+  }
+  if ([5, 10, 20].includes(settings.interval)) {
+    state.interval = settings.interval;
+    $('intervalSelect').value = String(settings.interval);
+  }
+  if (settings.exaggeration >= 1 && settings.exaggeration <= 10) {
+    state.exaggeration = settings.exaggeration;
+    $('exaggerationRange').value = String(settings.exaggeration);
+    $('exaggerationValue').value = `×${settings.exaggeration.toFixed(1)}`;
+  }
+  mapFeatures?.load(saved.features);
+  setTopo(Boolean(settings.topo));
+  scheduleUpdate();
+  return true;
+}
+
+function startFresh() {
+  pushUndo();
+  heights.fill(0);
+  mapFeatures?.clearAll();
+  rainSimulation?.stop();
+  scheduleUpdate();
+  scheduleSave();
+  showToast('התחלתם משטח חדש. אפשר לבטל ולחזור לפני השטח הקודמים.', { action: { label: 'ביטול', run: undo } });
+}
+
+const launchParams = new URLSearchParams(location.search);
+const savedProject = launchParams.has('fresh') ? null : loadProject();
+const restored = savedProject ? restoreProject(savedProject) : false;
+autosave = createAutosave(collectProject, { onSaved: flashSaved });
+if (restored) {
+  showToast('העבודה הקודמת שוחזרה.', { action: { label: 'התחלה חדשה', run: startFresh } });
+}
+window.__TOPOLAB_CLEAR_SAVE__ = clearProject;
+
+syncToolUI();
+updateHistoryButtons();
 updateMapReferenceScale();
 updateReadouts();
 updateMapScaleText();
