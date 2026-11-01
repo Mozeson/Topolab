@@ -1,3 +1,4 @@
+import { gridResolution, brushRadiusCells, sculpt, resampleForMapSize } from './terrain-grid.js';
 import { generateTerrain } from './terrain-generator.js';
 import { createSheepGame } from './sheep.js';
 import { initPanelSplitter } from './splitter.js';
@@ -10,9 +11,9 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { contours } from 'd3-contour';
 
 const $ = (id) => document.getElementById(id);
-const MAP_GRID_SIZES = { 4: 96, 6: 144, 8: 192 };
+
 const MAP_ZOOM_LEVELS = [1, 1.25, 1.5, 2, 3, 4];
-let N = MAP_GRID_SIZES[4];
+let N = gridResolution(4);
 let WORLD_SIZE = 10;
 
 const MIN_HEIGHT = -100;
@@ -24,7 +25,8 @@ let heights = new Float32Array(N * N);
 const state = {
   tool: 1,
   mapSize: 4,
-  brush: 24,
+  brush: 1920,
+  localSpacing: 5,
   strength: 14,
   topo: false,
   focus: null,
@@ -257,7 +259,7 @@ function mapFitSide() {
 
 function gridCellMeters() {
   // A reference grid square is 2 cm on a printed map: 500 m at 1:25,000.
-  return state.scale / 50;
+  return Math.min(state.scale / 50, mapExtentMeters());
 }
 
 function gridCellCount() {
@@ -438,7 +440,7 @@ function drawBrush() {
   const { gx, gy } = state.pointer;
   const x = (gx / (N - 1)) * mapCanvas.width;
   const y = (gy / (N - 1)) * mapCanvas.height;
-  const radius = (state.brush / 100 * N / (N - 1)) * mapCanvas.width;
+  const radius = state.brush / (2 * mapExtentMeters()) * mapCanvas.width;
   mapCtx.save();
   mapCtx.beginPath();
   mapCtx.arc(x, y, radius, 0, Math.PI * 2);
@@ -1092,40 +1094,21 @@ function updateSceneForMapSize() {
   resetCamera();
 }
 
-function resampleForMapSize(oldHeights, oldN, oldSize, newN, newSize) {
-  const next = new Float32Array(newN * newN);
-  for (let y = 0; y < newN; y++) {
-    for (let x = 0; x < newN; x++) {
-      const oldU = ((x / (newN - 1) - .5) * newSize / oldSize) + .5;
-      const oldV = ((y / (newN - 1) - .5) * newSize / oldSize) + .5;
-      if (oldU < 0 || oldU > 1 || oldV < 0 || oldV > 1) continue;
-      const gx = oldU * (oldN - 1);
-      const gy = oldV * (oldN - 1);
-      const x0 = Math.floor(gx);
-      const y0 = Math.floor(gy);
-      const x1 = Math.min(oldN - 1, x0 + 1);
-      const y1 = Math.min(oldN - 1, y0 + 1);
-      const tx = gx - x0;
-      const ty = gy - y0;
-      const top = lerp(oldHeights[y0 * oldN + x0], oldHeights[y0 * oldN + x1], tx);
-      const bottom = lerp(oldHeights[y1 * oldN + x0], oldHeights[y1 * oldN + x1], tx);
-      next[y * newN + x] = lerp(top, bottom, ty);
-    }
-  }
-  return next;
-}
 
-function setMapSize(newSize, restoredHeights = null) {
-  if (!MAP_GRID_SIZES[newSize] || newSize === state.mapSize) return;
+function setMapSize(newSize, restoredHeights = null, localSpacing = state.localSpacing) {
+  const nextN = gridResolution(newSize, localSpacing);
+  if (!nextN || (newSize === state.mapSize && nextN === N && !restoredHeights)) return;
   stopDrawing();
   rainSimulation?.stop();
-  const nextN = MAP_GRID_SIZES[newSize];
+
   const nextHeights = restoredHeights
     ? new Float32Array(restoredHeights)
     : resampleForMapSize(heights, N, state.mapSize, nextN, newSize);
 
   const previousMapSize = state.mapSize;
+  if (newSize === 1 && previousMapSize !== 1) state.brush = 100;
   state.mapSize = newSize;
+  state.localSpacing = localSpacing;
   N = nextN;
   WORLD_SIZE = newSize * 2.5;
   heights = nextHeights;
@@ -1135,6 +1118,7 @@ function setMapSize(newSize, restoredHeights = null) {
   state.mapView.panY = 0;
   lastStamp = null;
   $('mapSizeSelect').value = String(newSize);
+  syncDetailControls();
   const center = Math.floor((N - 1) / 2);
   $('pointHeight').textContent = `${Math.round(heights[center * N + center])} מ׳`;
 
@@ -1156,15 +1140,32 @@ function setMapSize(newSize, restoredHeights = null) {
     baseMesh.geometry.dispose();
     baseMesh.geometry = new THREE.BoxGeometry(WORLD_SIZE + .12, .36, WORLD_SIZE + .12);
   }
-  sheepGame?.resize(previousMapSize, newSize);
-  mapFeatures?.resize(previousMapSize, newSize);
+  if (previousMapSize !== newSize) {
+    sheepGame?.resize(previousMapSize, newSize);
+    mapFeatures?.resize(previousMapSize, newSize);
+  }
   updateSceneForMapSize();
   updateMapScaleText();
   resizeMap();
   scheduleUpdate();
   if (!restoredHeights) {
-    showToast(`גודל המפה שונה ל־${newSize}×${newSize} ק״מ. פני השטח הקיימים נשמרו במרכז.`);
+    showToast(`גודל המפה שונה ל־${newSize}×${newSize} ק״מ. המרכז נשמר; בהקטנת השטח השוליים נחתכים. אפשר לבטל.`);
   }
+}
+
+function syncDetailControls() {
+  const local = state.mapSize === 1;
+  $('detailControl').hidden = !local;
+  $('detailSelect').value = String(state.localSpacing);
+  $('gridSpacingReadout').textContent = `מרווח דגימות: ${(mapExtentMeters() / (N - 1)).toFixed(1)} מ׳`;
+  const minimum = Math.ceil(4 * mapExtentMeters() / (N - 1) / 5) * 5;
+  const maximum = mapExtentMeters();
+  state.brush = clamp(state.brush, minimum, maximum);
+  $('brushRange').min = minimum;
+  $('brushRange').max = maximum;
+  $('brushRange').value = state.brush;
+  $('brushValue').value = state.brush + ' מ׳';
+  $('localGullyControl').hidden = !local;
 }
 
 // ——— Shared state updates ———
@@ -1191,7 +1192,7 @@ function scheduleUpdate() {
 }
 
 function pushUndo() {
-  undoStack.push({ heights: new Float32Array(heights), mapSize: state.mapSize });
+  undoStack.push({ heights: new Float32Array(heights), mapSize: state.mapSize, localSpacing: state.localSpacing });
   if (undoStack.length > 24) undoStack.shift();
   $('undoBtn').disabled = false;
 }
@@ -1262,7 +1263,7 @@ function applyRandomTerrain(newSeed = false) {
     seedInput.reportValidity();
     return;
   }
-  const options = { seed: Number(seedInput.value) >>> 0 };
+  const options = { seed: Number(seedInput.value) >>> 0, extentMeters: mapExtentMeters(), gullyWidth: Number($('terrain-gullyWidth').value) };
   for (const name of ['relief', 'variation', 'detail', 'valleys']) {
     options[name] = Number($('terrain-' + name).value);
   }
@@ -1275,20 +1276,8 @@ function applyRandomTerrain(newSeed = false) {
 }
 
 function applyBrush(gx, gy, amount) {
-  const radius = state.brush / 100 * N;
-  const minX = Math.max(0, Math.floor(gx - radius));
-  const maxX = Math.min(N - 1, Math.ceil(gx + radius));
-  const minY = Math.max(0, Math.floor(gy - radius));
-  const maxY = Math.min(N - 1, Math.ceil(gy + radius));
-  for (let y = minY; y <= maxY; y++) {
-    for (let x = minX; x <= maxX; x++) {
-      const d = Math.hypot(x - gx, y - gy) / radius;
-      if (d >= 1) continue;
-      const falloff = (1 - d * d) ** 2;
-      const i = y * N + x;
-      heights[i] = clamp(heights[i] + amount * falloff, MIN_HEIGHT, MAX_HEIGHT);
-    }
-  }
+  const radius = brushRadiusCells(state.brush, mapExtentMeters(), N);
+  sculpt(heights, N, gx, gy, radius, amount, MIN_HEIGHT, MAX_HEIGHT);
   scheduleUpdate();
 }
 
@@ -1426,7 +1415,7 @@ mapCanvas.addEventListener('pointermove', (event) => {
   if (state.drawing) {
     const previous = lastStamp || next;
     const distance = Math.hypot(next.gx - previous.gx, next.gy - previous.gy);
-    const spacing = Math.max(1.5, state.brush / 100 * N * .18);
+    const spacing = Math.max(.25, brushRadiusCells(state.brush, mapExtentMeters(), N) * .18);
     const steps = Math.max(1, Math.ceil(distance / spacing));
     const now = performance.now();
     const elapsed = clamp((now - lastBrushTime) / 1000, 0, .15);
@@ -1522,7 +1511,7 @@ function updateExercise() {
 
 function startExercise() {
   if (state.exercise) return;
-  state.exerciseBackup = { heights: new Float32Array(heights), mapSize: state.mapSize, topo: state.topo };
+  state.exerciseBackup = { heights: new Float32Array(heights), mapSize: state.mapSize, localSpacing: state.localSpacing, topo: state.topo };
   rainSimulation?.stop();
   state.exercise = true;
   $('checkExerciseBtn').textContent = 'בדיקה';
@@ -1540,7 +1529,7 @@ function closeExercise() {
   const backup = state.exerciseBackup;
   state.exercise = false;
   state.exerciseBackup = null;
-  if (backup.mapSize !== state.mapSize) setMapSize(backup.mapSize, backup.heights);
+  if (backup.mapSize !== state.mapSize || backup.localSpacing !== state.localSpacing) setMapSize(backup.mapSize, backup.heights, backup.localSpacing);
   else heights.set(backup.heights);
   $('exerciseStrip').hidden = true;
   $('exerciseBtn').classList.remove('active');
@@ -1674,12 +1663,20 @@ for (const name of ['relief', 'variation', 'detail', 'valleys']) {
 $('topoBtn').addEventListener('click', () => setTopo(!state.topo));
 $('brushRange').addEventListener('input', (event) => {
   state.brush = Number(event.target.value);
-  $('brushValue').value = event.target.value;
+  $('brushValue').value = event.target.value + ' מ׳';
   drawMap();
 });
 $('strengthRange').addEventListener('input', (event) => {
   state.strength = Number(event.target.value);
   $('strengthValue').value = `${event.target.value} מ׳/ש׳`;
+});
+$('detailSelect').addEventListener('change', (event) => {
+  pushUndo();
+  setMapSize(state.mapSize, null, Number(event.target.value));
+  showToast('רמת הפירוט עודכנה. פרטים חדשים נוצרים בפיסול או ביצירת מפה חדשה.');
+});
+$('terrain-gullyWidth').addEventListener('input', event => {
+  $('terrain-gullyWidth-value').value = event.target.value + ' מ׳';
 });
 $('mapSizeSelect').addEventListener('change', (event) => {
   const newSize = Number(event.target.value);
@@ -1735,7 +1732,7 @@ $('exaggerationRange').addEventListener('input', (event) => {
 $('undoBtn').addEventListener('click', () => {
   const previous = undoStack.pop();
   if (!previous) return;
-  if (previous.mapSize !== state.mapSize) setMapSize(previous.mapSize, previous.heights);
+  if (previous.mapSize !== state.mapSize || previous.localSpacing !== state.localSpacing) setMapSize(previous.mapSize, previous.heights, previous.localSpacing);
   else heights.set(previous.heights);
   scheduleUpdate();
   showToast('הפעולה האחרונה בוטלה.');
@@ -1793,6 +1790,8 @@ window.__play = () => {};
 window.__APP_STATS__ = () => ({
   gridVertices: N * N,
   gridResolution: N,
+  sampleSpacingMeters: mapExtentMeters() / (N - 1),
+  brushDiameterMeters: state.brush,
   mapSizeKm: state.mapSize,
   mapExtentMeters: mapExtentMeters(),
   baseScale: state.scale,
@@ -1866,3 +1865,5 @@ drawMap();
 
 const timeParam = new URLSearchParams(location.search).get('t');
 if (timeParam !== null) window.__seek(Number(timeParam));
+
+syncDetailControls();

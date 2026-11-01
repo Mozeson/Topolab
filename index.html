@@ -194,8 +194,8 @@
           </button>
           <div class="rail-popover" id="brushPopover" hidden aria-label="הגדרות מברשת">
             <div class="popover-heading"><strong>הגדרות מברשת</strong><button class="popover-close" id="closeBrushBtn" type="button" aria-label="סגירת הגדרות המברשת">×</button></div>
-            <div class="range-heading"><label for="brushRange">גודל מברשת</label><output id="brushValue" for="brushRange">24</output></div>
-            <input id="brushRange" type="range" min="8" max="48" value="24" step="1">
+            <div class="range-heading"><label for="brushRange">קוטר מברשת (מטרים)</label><output id="brushValue" for="brushRange">1920 מ׳</output></div>
+            <input id="brushRange" type="range" min="170" max="4000" value="1920" step="5">
             <div class="range-heading strength-heading"><label for="strengthRange">עוצמה</label><output id="strengthValue" for="strengthRange">14 מ׳/ש׳</output></div>
             <input id="strengthRange" type="range" min="2" max="40" value="14" step="2">
             <p class="popover-note">קצב שינוי הגובה במרכז המברשת, במטרים לשנייה.</p>
@@ -225,6 +225,7 @@
 <label for="terrain-variation">שונות וגודל ההרים <output id="terrain-variation-value">60</output></label><input id="terrain-variation" type="range" min="0" max="100" value="60">
 <label for="terrain-detail">חספוס ופרטים קטנים <output id="terrain-detail-value">35</output></label><input id="terrain-detail" type="range" min="0" max="100" value="35">
 <label for="terrain-valleys">עומק הגאיות <output id="terrain-valleys-value">40</output></label><input id="terrain-valleys" type="range" min="0" max="100" value="40">
+<div id="localGullyControl" hidden><label for="terrain-gullyWidth">רוחב גאיות מקומיים <output id="terrain-gullyWidth-value">80 מ׳</output></label><input id="terrain-gullyWidth" type="range" min="40" max="200" step="5" value="80"><p class="popover-note">רוחב בקירוב בחצי העומק. עומק הגאיות נשלט בפקד שמעל.</p></div>
 <label for="terrainSeed">מספר מפה (לשחזור)</label><input id="terrainSeed" type="number" min="0" max="4294967295" step="1" required>
             <p class="popover-note">אותו מספר ואותן הגדרות יוצרים את אותו תבליט. השינויים יחולו בלחיצה על יצירה.</p>
             <div class="random-actions"><button class="small-action" id="generateTerrainBtn" type="button">יצירה לפי ההגדרות</button><button class="small-action" id="newTerrainBtn" type="button">הגרלת מפה חדשה</button></div>
@@ -283,11 +284,16 @@
           <label class="interval-control map-size-control" for="mapSizeSelect">
             גודל מפה
             <select id="mapSizeSelect">
+              <option value="1">1×1 ק״מ — שטח מפורט</option>
               <option value="4" selected>4×4 ק״מ</option>
               <option value="6">6×6 ק״מ</option>
               <option value="8">8×8 ק״מ</option>
             </select>
           </label>
+          <label class="interval-control" id="detailControl" hidden for="detailSelect">מרווח דגימות
+            <select id="detailSelect"><option value="5">5 מטר — מפורט</option><option value="10">10 מטר — קל</option></select>
+          </label>
+          <span class="scale-note" id="gridSpacingReadout"></span>
           <div class="map-legend" id="mapLegend" aria-label="מקרא גובה">
             <span>נמוך</span><div class="legend-ramp"></div><span>גבוה</span>
           </div>
@@ -308,7 +314,7 @@
                 <option value="20">20 מ׳</option>
               </select>
             </label>
-            <details class="scale-help"><summary>על קנה המידה והזום</summary><p id="printScaleHelp">קנה המידה קובע את המרחק האמיתי של המשבצות: ב־1:25,000 כל משבצת מייצגת 500 מ׳, ב־1:50,000 היא מייצגת 1 ק״מ, וב־1:100,000 היא מייצגת 2 ק״מ. הזום רק מקרב או מרחיק את מצלמת התצוגה: המפה גדלה על המסך ואפשר לגרור אותה, אבל השטח, הקואורדינטות, הגבהים והיחסים בין הפריטים אינם משתנים.</p></details>
+            <details class="scale-help"><summary>על קנה המידה והזום</summary><p id="printScaleHelp">קנה המידה קובע את המרחק האמיתי של המשבצות: ב־1:25,000 כל משבצת מייצגת 500 מ׳, ב־1:50,000 היא מייצגת 1 ק״מ, וב־1:100,000 היא מייצגת 2 ק״מ. במפה קטנה, גודל משבצת מוגבל לאורך צלע המפה. הזום רק מקרב או מרחיק את מצלמת התצוגה: המפה גדלה על המסך ואפשר לגרור אותה, אבל השטח, הקואורדינטות, הגבהים והיחסים בין הפריטים אינם משתנים.</p></details>
             <span class="scale-note" id="scaleNote">קנה מידה בסיסי 1:25,000 · זום תצוגה 100%</span>
           </div>
         </div>

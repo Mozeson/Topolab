@@ -680,3 +680,13 @@ body.resizing-panels { user-select: none; cursor: col-resize; }
 .random-popover input { width: 100%; accent-color: var(--ink); }
 .random-popover input[type="number"] { margin-top: 6px; padding: 6px; box-sizing: border-box; }
 .random-actions { display: grid; gap: 8px; margin-top: 12px; }
+@media (max-width: 520px) {
+  .random-popover {
+    position: fixed;
+    inset: 12px 12px auto;
+    width: auto;
+    max-width: none;
+    max-height: calc(100dvh - 24px);
+    z-index: 100;
+  }
+}
