@@ -10,6 +10,8 @@ export const SHORTCUTS = [
   { id: 'tool-smooth', codes: ['KeyS'], label: 'S', description: 'כלי החלקה' },
   { id: 'tool-pan', codes: ['KeyH'], label: 'H', description: 'הזזת המפה' },
   { id: 'tool-features', codes: ['KeyF'], label: 'F', description: 'ציור תכסית' },
+  { id: 'tool-course', codes: ['KeyC'], label: 'C', description: 'תכנון מסלול ניווט' },
+  { id: 'open-navigation', codes: ['KeyG'], label: 'G', description: 'יציאה לניווט' },
   { id: 'toggle-topo', codes: ['KeyT'], label: 'T', description: 'מעבר בין פיסול למפה טופוגרפית' },
   { id: 'toggle-rain', codes: ['KeyW'], label: 'W', description: 'הפעלה וניקוי של גשם' },
   { id: 'new-terrain', codes: ['KeyN'], label: 'N', description: 'תפריט שטח חדש' },
@@ -62,6 +64,7 @@ export function initShortcuts(handlers) {
   document.addEventListener('keydown', (event) => {
     if (event.defaultPrevented || event.repeat && !/^(brush|strength|zoom)/.test(matchShortcut(event) || '')) return;
     if (isTypingTarget(event.target)) return;
+    if (document.body.classList.contains('navigating')) return; // the game owns the keyboard
     if (document.querySelector('dialog[open]')) return;
     const id = matchShortcut(event);
     if (!id || !handlers[id]) return;

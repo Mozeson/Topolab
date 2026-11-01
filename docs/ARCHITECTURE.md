@@ -16,6 +16,8 @@ index.html ── src/style.css
            ├── shortcuts.js        טבלת קיצורים + handler גלובלי
            ├── terrain-generator.js  מפה אקראית לפי seed (טהור, עם בדיקות)
            ├── hydrology.js        מודל זרימה (טהור, עם בדיקות)
+           ├── course.js           מסלול ניווט: מודל, מחולל, ניקוד, ציור (טהור, עם בדיקות)
+           ├── nav-game.js         משחק הניווט: תדריך, HUD, דגלים/שמיים/שיחים, תוצאות (docs/NAVIGATION.md)
            ├── rain.js             הדמיית גשם (2D + 3D), משתמש ב-hydrology
            ├── map-features.js     שבילים/דרכים/נחלים: ציור, אימות שיפוע, 3D, serialize/load
            ├── sheep.js            ביצת פסחא: "חפשו את הכבשה"
@@ -34,7 +36,8 @@ index.html ── src/style.css
 | `heights: Float32Array(N*N)` | הגובה במטרים לכל תא ברשת. הטווח: `MIN_HEIGHT..MAX_HEIGHT` (‎-100..200) |
 | `N`, `WORLD_SIZE` | גודל הרשת לפי `gridResolution(mapSize, localSpacing)`: ‏1 ק"מ → 201/101 (5/10 מ׳), 4 → 96, 6 → 144, 8 → 192 |
 | `state.localSpacing` | מרווח הדגימה במפה של 1 ק"מ (5 או 10) |
-| `state.tool` | `'raise' \| 'lower' \| 'smooth' \| 'pan' \| 'features'` |
+| `state.tool` | `'raise' \| 'lower' \| 'smooth' \| 'pan' \| 'features' \| 'course'` |
+| `state.course`, `state.coursePlace`, `state.navigating` | מסלול הניווט, מה שלחיצה מציבה, והאם המשחק פעיל |
 | `state.strokeTool` | הכלי בפועל במשיכה הנוכחית (אחרי Alt/Shift) |
 | `state.tempPan` | רווח מוחזק |
 | `state.brush`, `state.strength` | קוטר המברשת **במטרים** ועוצמה (מטר לשנייה). הרדיוס בתאים מחושב ב-`brushRadiusCells()` |
@@ -104,6 +107,6 @@ showToast('תיאור קצר.', { action: { label: 'ביטול', run: undo } });
 
 ## בדיקות
 
-- `npm test`: בדיקות `node:test` בתיקייה `tests/`. הן מכסות את המודולים הטהורים: `terrain-generator`, `terrain-grid`, `hydrology`, `history`, `brush`, `persistence`, `shortcuts`.
+- `npm test`: בדיקות `node:test` בתיקייה `tests/`. הן מכסות את המודולים הטהורים: `terrain-generator`, `terrain-grid`, `course`, `hydrology`, `history`, `brush`, `persistence`, `shortcuts`.
 - `scripts/verify-content.mjs`: בדיקה ויזואלית ב-Chrome headless (רינדור, שגיאות, צילומי מסך). הפלט נכתב ל-`verification-shots/`; צריך למחוק אותו לפני commit.
 - `window.__APP_STATS__()` חושף מצב לבדיקות אוטומטיות בדפדפן (Playwright). `?fresh` מונע טעינה של שמירה קודמת.

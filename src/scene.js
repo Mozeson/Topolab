@@ -10,6 +10,8 @@ import { createHistory } from './history.js';
 import { applyHeightBrush, applySmoothBrush, slopePercent, SCULPT_TOOLS } from './brush.js';
 import { createAutosave, loadProject, clearProject } from './persistence.js';
 import { initShortcuts, SHORTCUTS, HOLD_HINTS, shortcutLabel } from './shortcuts.js';
+import { emptyCourse, sanitizeCourse, isRunnable, generateCourse, courseLength, drawCourse, coursePoints, cloneCourse } from './course.js';
+import { createNavGame } from './nav-game.js';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { contours } from 'd3-contour';
@@ -29,9 +31,12 @@ const plinthBox = () => new THREE.BoxGeometry(WORLD_SIZE + .12 * plinthScale(), 
 const EYE_HEIGHT_METERS = 1.7;
 const OBSERVER_FOV = 65;
 let heights = new Float32Array(N * N);
-const TOOL_LABELS = { raise: 'הגבהה', lower: 'הנמכה', smooth: 'החלקה', pan: 'הזזת מפה', features: 'תכסית' };
+const TOOL_LABELS = { raise: 'הגבהה', lower: 'הנמכה', smooth: 'החלקה', pan: 'הזזת מפה', features: 'תכסית', course: 'מסלול' };
 const state = {
-  tool: 'raise',          // 'raise' | 'lower' | 'smooth' | 'pan' | 'features'
+  tool: 'raise',          // 'raise' | 'lower' | 'smooth' | 'pan' | 'features' | 'course'
+  course: emptyCourse(),  // orienteering course (course.js)
+  coursePlace: 'control', // what a click places with the course tool: 'start' | 'control' | 'finish'
+  navigating: false,      // the navigation game owns the screen (nav-game.js)
   tempPan: false,         // space held over the map
   lastFeatureType: 'trail',
   mapSize: 4,
@@ -66,6 +71,8 @@ let mapFeatures = null;
 let rainSimulation = null;
 let lastRandomTerrain = null;
 let mapPanDrag = null;
+let courseDrag = null;
+let navGame = null;
 let lastMapBaseSide = 0;
 let wheelZoomDelta = 0;
 
@@ -246,6 +253,7 @@ function drawContours(ctx, w, h, dpr) {
     const y = p[1] * sy;
     const text = `${shape.value} מ׳`;
     const width = ctx.measureText(text).width + 8 * dpr;
+    if (x - width / 2 < 0 || x + width / 2 > w || y < 10 * dpr || y > h - 10 * dpr) continue; // never clip a label at the edge
     ctx.fillStyle = 'rgba(248,246,229,.9)';
     ctx.fillRect(x - width / 2, y - 8 * dpr, width, 16 * dpr);
     ctx.fillStyle = '#51462f';
@@ -586,6 +594,12 @@ function drawMap() {
   }
   rainSimulation?.draw2D(mapCtx, mapCanvas, mapDpr);
   mapFeatures?.draw2D(mapCtx, mapCanvas, mapDpr);
+  if (state.course.start) {
+    mapCtx.save();
+    if (state.tool !== 'course') mapCtx.globalAlpha = .55;
+    drawCourse(mapCtx, state.course, { width: mapCanvas.width, height: mapCanvas.height, dpr: mapDpr });
+    mapCtx.restore();
+  }
   sheepGame?.draw(mapCtx, mapCanvas, mapDpr);
   drawObserver();
   if (!sheepGame?.placing && !state.observer.placing && !state.observerDrag && (!state.observer.firstPerson || state.drawing)) drawBrush();
@@ -708,19 +722,36 @@ function installContourShader(material) {
   contourUniforms = {
     uContours: { value: 0 },
     uInterval: { value: state.interval },
+    uDetail: { value: 0 },          // 1 in the navigation game: ground texture for a sense of speed
+    uWorldToMeters: { value: 400 },
   };
   material.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, contourUniforms);
     shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', '#include <common>\nattribute float aHeight;\nvarying float vTerrainHeight;')
-      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvTerrainHeight = aHeight;');
+      .replace('#include <common>', '#include <common>\nattribute float aHeight;\nvarying float vTerrainHeight;\nvarying vec2 vGroundXZ;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvTerrainHeight = aHeight;\nvGroundXZ = position.xz;');
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', `#include <common>
         varying float vTerrainHeight;
+        varying vec2 vGroundXZ;
         uniform float uContours;
         uniform float uInterval;
+        uniform float uDetail;
+        uniform float uWorldToMeters;
+        float groundHash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+        float groundNoise(vec2 p) {
+          vec2 i = floor(p); vec2 f = fract(p); f = f * f * (3.0 - 2.0 * f);
+          return mix(mix(groundHash(i), groundHash(i + vec2(1.0, 0.0)), f.x), mix(groundHash(i + vec2(0.0, 1.0)), groundHash(i + vec2(1.0, 1.0)), f.x), f.y);
+        }
       `)
       .replace('#include <color_fragment>', `#include <color_fragment>
+        if (uDetail > 0.5) {
+          vec2 m = vGroundXZ * uWorldToMeters;
+          float n = groundNoise(m / 22.0) * .55 + groundNoise(m / 6.0) * .3 + groundNoise(m / 1.7) * .15;
+          float patches = smoothstep(.35, .75, groundNoise(m / 90.0 + 7.3));
+          diffuseColor.rgb *= .82 + n * .34;
+          diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(1.08, 1.02, .82), patches * .35);
+        }
         if (uContours > 0.5) {
           float coord = vTerrainHeight / uInterval;
           float fw = max(fwidth(coord), 0.0001);
@@ -735,7 +766,7 @@ function installContourShader(material) {
         }
       `);
   };
-  material.customProgramCacheKey = () => 'terrain-contour-v1';
+  material.customProgramCacheKey = () => 'terrain-contour-v2';
 }
 
 function initThree() {
@@ -825,8 +856,12 @@ function initThree() {
       const now = performance.now();
       const dt = Math.min((now - lastFrameTime) / 1000, .1);
       lastFrameTime = now;
-      const axes = navigation?.frame();
-      if (axes?.active) applyNavigation(axes, dt);
+      if (navGame?.active) {
+        navGame.frame(dt);
+      } else {
+        const axes = navigation?.frame();
+        if (axes?.active) applyNavigation(axes, dt);
+      }
       const moved = state.observer.firstPerson ? false : controls.update();
       if (moved || needsRender) {
         renderer.render(scene, camera);
@@ -927,7 +962,7 @@ function updateTerrain() {
     const h = heights[i];
     positions.array[i * 3 + 1] = h * metersToWorld() * state.exaggeration;
     meterValues.array[i] = h;
-    const [r, g, b] = heightColor(h, !state.topo).map((v) => v / 255);
+    const [r, g, b] = heightColor(h, !state.topo && !state.navigating).map((v) => v / 255);
     const color = new THREE.Color().setRGB(r, g, b, THREE.SRGBColorSpace);
     colors.array[i * 3] = color.r;
     colors.array[i * 3 + 1] = color.g;
@@ -940,8 +975,10 @@ function updateTerrain() {
   terrainGeometry.computeBoundingSphere();
   updateSkirt();
   if (contourUniforms) {
-    contourUniforms.uContours.value = state.topo ? 1 : 0;
+    contourUniforms.uContours.value = state.topo && !state.navigating ? 1 : 0;
     contourUniforms.uInterval.value = state.interval;
+    contourUniforms.uDetail.value = state.navigating ? 1 : 0;
+    contourUniforms.uWorldToMeters.value = 1 / metersToWorld();
   }
   if (state.observer.firstPerson) updateObserverCamera();
   sheepGame?.update3D();
@@ -997,7 +1034,7 @@ function updateObserverCamera() {
   const verticalScale = metersToWorld() * state.exaggeration;
   camera.position.set(
     (observer.u - .5) * WORLD_SIZE,
-    groundHeight * verticalScale + EYE_HEIGHT_METERS * metersToWorld(),
+    groundHeight * verticalScale + (EYE_HEIGHT_METERS + (observer.bob || 0)) * metersToWorld(),
     (observer.v - .5) * WORLD_SIZE,
   );
   const heading = observer.heading * Math.PI / 180;
@@ -1202,6 +1239,19 @@ function setMapSize(newSize, restoredHeights = null, localSpacing = state.localS
   if (previousMapSize !== newSize) {
     sheepGame?.resize(previousMapSize, newSize);
     mapFeatures?.resize(previousMapSize, newSize);
+    // Keep course points on the same ground; drop those that fall off a smaller map.
+    const k = previousMapSize / newSize;
+    const scalePoint = (p) => {
+      if (!p) return null;
+      const q = { u: .5 + (p.u - .5) * k, v: .5 + (p.v - .5) * k };
+      return q.u >= 0 && q.u <= 1 && q.v >= 0 && q.v <= 1 ? q : null;
+    };
+    state.course = {
+      start: scalePoint(state.course.start),
+      controls: state.course.controls.map(scalePoint).filter(Boolean),
+      finish: scalePoint(state.course.finish),
+    };
+    updateCourseUI();
   }
   updateSceneForMapSize();
   updateMapScaleText();
@@ -1297,7 +1347,7 @@ function setTool(tool) {
   const previous = state.tool;
   state.tool = tool;
   if (tool !== 'features' && previous === 'features') mapFeatures?.cancel(true);
-  if (tool === 'pan' || tool === 'features') {
+  if (tool === 'pan' || tool === 'features' || tool === 'course') {
     state.observer.placing = false;
     sheepGame?.cancelPlacement?.();
     updateObserverUI();
@@ -1316,6 +1366,8 @@ function syncToolUI() {
   $('sculptOptions').hidden = !isSculptTool(tool);
   $('panOptions').hidden = tool !== 'pan';
   $('featureOptions').hidden = tool !== 'features';
+  $('courseOptions').hidden = tool !== 'course';
+  if (tool === 'course') updateCourseUI();
   const label = $('toolMode');
   label.textContent = TOOL_LABELS[tool];
   label.className = `options-tool ${tool}`;
@@ -1441,6 +1493,145 @@ function eventToGrid(event) {
   };
 }
 
+// ——— Orienteering course planning (course tool) ———
+// Click places the selected kind of point; dragging an existing point moves it.
+// Without a finish the course returns to the start (a loop).
+function courseHitTest(event) {
+  const rect = mapCanvas.getBoundingClientRect();
+  const x = (event.clientX - rect.left) / rect.width;
+  const y = (event.clientY - rect.top) / rect.height;
+  const tolerance = 16 / rect.width;
+  const candidates = [];
+  if (state.course.finish) candidates.push({ kind: 'finish' });
+  state.course.controls.forEach((_, index) => candidates.push({ kind: 'control', index }));
+  if (state.course.start) candidates.push({ kind: 'start' });
+  for (const candidate of candidates) {
+    const p = candidate.kind === 'control' ? state.course.controls[candidate.index] : state.course[candidate.kind];
+    if (Math.hypot(p.u - x, p.v - y) <= tolerance) return candidate;
+  }
+  return null;
+}
+
+function moveCoursePoint(target, point) {
+  const p = { u: clamp(point.u, 0, 1), v: clamp(point.v, 0, 1) };
+  if (target.kind === 'control') state.course.controls[target.index] = p;
+  else state.course[target.kind] = p;
+}
+
+function handleCoursePointerDown(next, event) {
+  const hit = courseHitTest(event);
+  if (hit) {
+    courseDrag = { ...hit, pointerId: event.pointerId, moved: false };
+    mapCanvas.setPointerCapture(event.pointerId);
+    return;
+  }
+  const point = { u: next.gx / (N - 1), v: next.gy / (N - 1) };
+  const place = state.course.start ? state.coursePlace : 'start';
+  if (place === 'start') state.course.start = point;
+  else if (place === 'finish') state.course.finish = point;
+  else if (state.course.controls.length < 30) state.course.controls.push(point);
+  if (place !== 'control') state.coursePlace = 'control';
+  updateCourseUI();
+  drawMap();
+  scheduleSave();
+}
+
+function removeLastCoursePoint() {
+  const course = state.course;
+  if (course.finish) course.finish = null;
+  else if (course.controls.length) course.controls.pop();
+  else course.start = null;
+  updateCourseUI();
+  drawMap();
+  scheduleSave();
+}
+
+function updateCourseUI() {
+  const course = state.course;
+  for (const button of document.querySelectorAll('[data-course-place]')) {
+    button.setAttribute('aria-checked', String(button.dataset.coursePlace === (course.start ? state.coursePlace : 'start')));
+  }
+  const controls = course.controls.length;
+  let summary;
+  if (!course.start) summary = 'לחצו על המפה כדי להציב את נקודת הזינוק';
+  else if (!controls) summary = 'עכשיו הציבו נקודות ביקורת לפי הסדר';
+  else summary = `${controls} נקודות · ${formatMapDistance(courseLength(course, mapExtentMeters()))}${course.finish ? '' : ' · חוזרים לזינוק'}`;
+  $('courseSummary').textContent = summary;
+  $('startNavBtn').disabled = !isRunnable(course);
+  $('undoCourseBtn').disabled = !course.start;
+  $('clearCourseBtn').disabled = !course.start;
+}
+
+function setCourse(course, message = null) {
+  const previous = cloneCourse(state.course);
+  state.course = course;
+  updateCourseUI();
+  drawMap();
+  scheduleSave();
+  if (message) showToast(message, { action: { label: 'ביטול', run: () => setCourse(previous) } });
+}
+
+function openNavigation() {
+  if (!isRunnable(state.course)) {
+    setTool('course');
+    showToast('קודם קובעים מסלול: לחצו על המפה להצבת זינוק ונקודות, או על „מסלול אקראי”.');
+    return;
+  }
+  closePopovers();
+  stopDrawing();
+  navGame?.openSetup(cloneCourse(state.course));
+}
+
+// Game mode: the 3D panel fills the window, terrain shows natural colours with ground
+// texture, contours are hidden and the vertical scale is true (×1).
+let gameSaved = null;
+function enterGameMode() {
+  stopDrawing();
+  closePopovers();
+  rainSimulation?.stop();
+  sheepGame?.cancelPlacement?.();
+  if (camera && controls && !state.observer.firstPerson) {
+    savedOrbitPosition = camera.position.clone();
+    savedOrbitTarget = controls.target.clone();
+  }
+  gameSaved = {
+    exaggeration: state.exaggeration,
+    fog: scene?.fog,
+    background: scene?.background,
+    observer: { ...state.observer },
+  };
+  state.navigating = true;
+  state.exaggeration = 1;
+  $('toast').hidden = true;
+  document.body.classList.add('navigating');
+  Object.assign(state.observer, { placed: true, firstPerson: true, placing: false });
+  if (controls) controls.enabled = false;
+  if (scene) {
+    scene.fog = new THREE.Fog(0xdfe9e2, WORLD_SIZE * .3, WORLD_SIZE * 1.45);
+    scene.background = new THREE.Color(0xdfe9e2);
+  }
+  updateObserverUI();
+  updateTerrain();
+  updateBrushRing();
+  requestAnimationFrame(() => { resizeThree(); updateObserverCamera(); });
+}
+
+function exitGameMode() {
+  if (!state.navigating) return;
+  state.navigating = false;
+  document.body.classList.remove('navigating');
+  state.exaggeration = gameSaved?.exaggeration ?? state.exaggeration;
+  if (scene && gameSaved) {
+    scene.fog = gameSaved.fog;
+    scene.background = gameSaved.background;
+  }
+  Object.assign(state.observer, gameSaved?.observer || {}, { bob: 0 });
+  gameSaved = null;
+  exitObserver();
+  updateTerrain();
+  requestAnimationFrame(() => { resizeThree(); resizeMap(); });
+}
+
 // ——— Cursor readout: height (and slope) next to the pointer ———
 const cursorReadout = $('cursorReadout');
 let lastReadoutClient = null;
@@ -1478,6 +1669,11 @@ function updatePointReadout(pointer, event = null) {
 }
 
 function stopDrawing(event) {
+  if (courseDrag) {
+    courseDrag = null;
+    updateCourseUI();
+    scheduleSave();
+  }
   if (mapPanDrag) {
     if (mapCanvas.hasPointerCapture(mapPanDrag.pointerId)) mapCanvas.releasePointerCapture(mapPanDrag.pointerId);
     mapPanDrag = null;
@@ -1532,6 +1728,10 @@ mapCanvas.addEventListener('pointerdown', (event) => {
   event.preventDefault();
   mapCanvas.focus({ preventScroll: true });
   const next = eventToGrid(event);
+  if (state.tool === 'course') {
+    handleCoursePointerDown(next, event);
+    return;
+  }
   if (state.tool === 'features') {
     if (mapFeatures && !mapFeatures.active) mapFeatures.activate(state.lastFeatureType);
     if (mapFeatures?.handlePointerDown(next.gx, next.gy)) {
@@ -1598,6 +1798,12 @@ mapCanvas.addEventListener('pointermove', (event) => {
     return;
   }
   updatePointReadout(next, event);
+  if (courseDrag) {
+    moveCoursePoint(courseDrag, { u: next.gx / (N - 1), v: next.gy / (N - 1) });
+    courseDrag.moved = true;
+    drawMap();
+    return;
+  }
   if (state.tool === 'features' && mapFeatures?.handlePointerMove(next.gx, next.gy)) return;
   if (state.observerDrag) {
     if (state.observerDrag === 'move') {
@@ -1661,6 +1867,11 @@ $('mapWrap').addEventListener('wheel', (event) => {
 // Enter applies the current tool. In pan mode the arrows move the map instead.
 mapCanvas.addEventListener('keydown', (event) => {
   if (state.tool === 'features' && mapFeatures?.handleKey(event)) return;
+  if (state.tool === 'course' && (event.key === 'Backspace' || event.key === 'Delete')) {
+    event.preventDefault();
+    removeLastCoursePoint();
+    return;
+  }
   if (isPanning()) {
     const panStep = event.shiftKey ? 100 : 40;
     if (event.key === 'ArrowLeft') state.mapView.panX -= panStep;
@@ -1830,7 +2041,7 @@ document.addEventListener('pointerdown', (event) => {
   if (!event.target.closest('#newTerrainPopover, #newTerrainBtn, #toast')) closePopovers();
 });
 document.addEventListener('keydown', (event) => {
-  if (event.key !== 'Escape' || document.querySelector('dialog[open]')) return;
+  if (event.key !== 'Escape' || state.navigating || document.querySelector('dialog[open]')) return;
   sheepGame?.cancelPlacement();
   if (!$('newTerrainPopover').hidden) { closePopovers(); $('newTerrainBtn').focus(); return; }
   if (state.tool === 'features') {
@@ -2000,6 +2211,8 @@ window.__seek = () => {
   if (renderer && scene && camera) renderer.render(scene, camera);
 };
 window.__play = () => {};
+window.__NAV_TELEPORT__ = () => navGame?.debugTeleport();
+window.__NAV_LOOK_AT_NEXT__ = (meters) => navGame?.debugApproach(meters);
 window.__APP_STATS__ = () => ({
   gridVertices: N * N,
   gridResolution: N,
@@ -2024,6 +2237,8 @@ window.__APP_STATS__ = () => ({
   triangles: renderer ? renderer.info.render.triangles : 0,
   drawCalls: renderer ? renderer.info.render.calls : 0,
   mode: state.topo ? 'topographic' : 'sculpt',
+  course: { points: coursePoints(state.course).length, runnable: isRunnable(state.course) },
+  navigation: navGame?.stats() || null,
 });
 
 const mapResizeObserver = new ResizeObserver(resizeMap);
@@ -2077,6 +2292,44 @@ if (renderer) {
   renderer.domElement.addEventListener('pointerdown', () => renderer.domElement.focus());
   navigation = initNavigation(renderer.domElement, $('moveJoystick'), $('zoomJoystick'));
 }
+// ——— Course planning controls and the navigation game ———
+for (const button of document.querySelectorAll('[data-course-place]')) {
+  button.addEventListener('click', () => {
+    state.coursePlace = button.dataset.coursePlace;
+    if (!state.course.start && state.coursePlace !== 'start') showToast('קודם מציבים את נקודת הזינוק.');
+    updateCourseUI();
+  });
+}
+$('randomCourseBtn').addEventListener('click', () => {
+  const count = Number($('courseCountSelect').value);
+  const seed = crypto.getRandomValues(new Uint32Array(1))[0];
+  const generated = generateCourse({ heights, n: N, extentMeters: mapExtentMeters(), count, seed });
+  setCourse({ start: generated.start, controls: generated.controls, finish: null }, `נוצר מסלול של ${count} נקודות. אפשר לגרור נקודות כדי לשנות.`);
+});
+$('undoCourseBtn').addEventListener('click', removeLastCoursePoint);
+$('clearCourseBtn').addEventListener('click', () => setCourse(emptyCourse(), 'המסלול נמחק.'));
+$('startNavBtn').addEventListener('click', openNavigation);
+$('navBtn').addEventListener('click', openNavigation);
+
+navGame = createNavGame({
+  scene: () => scene,
+  camera: () => camera,
+  canvas: () => renderer?.domElement,
+  observer: state.observer,
+  extent: mapExtentMeters,
+  mapSize: () => state.mapSize,
+  worldSize: () => WORLD_SIZE,
+  metersToWorld,
+  height: sampleHeight,
+  verticalScale: () => metersToWorld() * state.exaggeration,
+  axes: () => navigation?.frame(),
+  updateCamera: updateObserverCamera,
+  invalidate: () => { needsRender = true; },
+  renderMapBase: (ctx, w, h, dpr) => drawPrintBlock(ctx, w, h, dpr, { mapStyle: 'hypsometric', tintOpacity: .4, showGrid: false, showCoordinates: false, showFeatures: true }),
+  enter: enterGameMode,
+  exit: exitGameMode,
+});
+
 // ——— Keyboard shortcuts, tooltips and the shortcut list (docs/UI-GUIDE.md) ———
 const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
 const keyLabel = (label) => (isMac ? label.replace('Ctrl', '⌘') : label);
@@ -2100,6 +2353,8 @@ initShortcuts({
   'tool-smooth': () => setTool('smooth'),
   'tool-pan': () => setTool('pan'),
   'tool-features': () => setTool('features'),
+  'tool-course': () => setTool('course'),
+  'open-navigation': () => openNavigation(),
   'toggle-topo': () => setTopo(!state.topo),
   'toggle-rain': () => rainSimulation?.toggle(),
   'new-terrain': () => toggleNewTerrainMenu(),
@@ -2117,7 +2372,7 @@ initShortcuts({
 
 // Hold Space over the map to pan temporarily (like most drawing apps).
 document.addEventListener('keydown', (event) => {
-  if (event.code !== 'Space' || !mouseIsOverMap() || document.querySelector('dialog[open]')) return;
+  if (event.code !== 'Space' || state.navigating || !mouseIsOverMap() || document.querySelector('dialog[open]')) return;
   const target = event.target;
   if (target instanceof Element && target.closest('input:not([type="range"]), select, textarea')) return;
   event.preventDefault();
@@ -2153,6 +2408,7 @@ function collectProject() {
       exaggeration: state.exaggeration,
     },
     features: mapFeatures?.serialize() || [],
+    course: cloneCourse(state.course),
   };
 }
 
@@ -2188,6 +2444,8 @@ function restoreProject(saved) {
     $('exaggerationValue').value = `×${settings.exaggeration.toFixed(1)}`;
   }
   mapFeatures?.load(saved.features);
+  state.course = sanitizeCourse(saved.course);
+  updateCourseUI();
   setTopo(Boolean(settings.topo));
   scheduleUpdate();
   return true;

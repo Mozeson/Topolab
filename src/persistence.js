@@ -25,7 +25,7 @@ export function decodeHeights(encoded, expectedLength) {
   return heights;
 }
 
-export function serializeProject({ heights, mapSize, settings = {}, features = [] }) {
+export function serializeProject({ heights, mapSize, settings = {}, features = [], course = null }) {
   return JSON.stringify({
     version: VERSION,
     savedAt: new Date().toISOString(),
@@ -34,6 +34,7 @@ export function serializeProject({ heights, mapSize, settings = {}, features = [
     heights: encodeHeights(heights),
     settings,
     features,
+    course,
   });
 }
 
