@@ -171,6 +171,10 @@
             <label class="trail-color-control" for="trailColorSelect">צבע שביל מסומן
               <select id="trailColorSelect"><option value="red">אדום</option><option value="green">ירוק</option><option value="blue">כחול</option><option value="black">שחור</option></select>
             </label>
+            <label class="road-number-control" id="roadNumberControl" for="roadNumberInput" hidden>מספר כביש
+              <input id="roadNumberInput" type="text" inputmode="numeric" maxlength="4" pattern="[0-9]{1,4}" placeholder="למשל 90" autocomplete="off">
+              <small>המספר יסומן על המפה וגם בייצוא ל־PDF.</small>
+            </label>
             <div class="feature-actions">
               <button id="finishFeatureBtn" type="button" disabled>סיום קו</button>
               <button id="cancelFeatureBtn" type="button" disabled>ביטול כלי</button>
@@ -195,7 +199,7 @@
           <div class="rail-popover" id="brushPopover" hidden aria-label="הגדרות מברשת">
             <div class="popover-heading"><strong>הגדרות מברשת</strong><button class="popover-close" id="closeBrushBtn" type="button" aria-label="סגירת הגדרות המברשת">×</button></div>
             <div class="range-heading"><label for="brushRange">גודל מברשת</label><output id="brushValue" for="brushRange">24</output></div>
-            <input id="brushRange" type="range" min="8" max="48" value="24" step="1">
+            <input id="brushRange" type="range" min="8" max="36" value="24" step="1">
             <div class="range-heading strength-heading"><label for="strengthRange">עוצמה</label><output id="strengthValue" for="strengthRange">14 מ׳/ש׳</output></div>
             <input id="strengthRange" type="range" min="2" max="40" value="14" step="2">
             <p class="popover-note">קצב שינוי הגובה במרכז המברשת, במטרים לשנייה.</p>
@@ -375,10 +379,10 @@
               <span><strong>צביעה והצללת תבליט</strong><small>מדגישה גם גובה וגם שיפוע</small></span>
             </label>
             <label class="pdf-opacity-control" for="pdfTintOpacity">
-              <span>עוצמת הצבע <output id="pdfTintOpacityValue">85%</output></span>
-              <input type="range" id="pdfTintOpacity" min="25" max="100" step="5" value="85" />
+              <span>עוצמת הצבע <output id="pdfTintOpacityValue">55%</output></span>
+              <input type="range" id="pdfTintOpacity" min="20" max="70" step="5" value="55" />
             </label>
-            <p class="pdf-standard-note">ערכת הצבעים קבועה לפי צביעה היפסומטרית מקובלת, כדי לשמור על קריאה עקבית.</p>
+            <p class="pdf-standard-note">ערכת הצבעים קבועה ומחולקת למדרגות גובה ברורות, כדי למנוע צבע חזק מדי ומעברים מטושטשים.</p>
           </fieldset>
 
           <fieldset class="pdf-option-group pdf-layer-grid">

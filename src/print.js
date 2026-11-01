@@ -10,7 +10,7 @@ const MAX_MAP_MM = 180;
 
 export const DEFAULT_PDF_OPTIONS = Object.freeze({
   mapStyle: 'shaded',
-  tintOpacity: 0.85,
+  tintOpacity: 0.55,
   showGrid: true,
   showCoordinates: true,
   showLegend: true,
@@ -129,13 +129,14 @@ function drawMapSheet(ctx, data, rawOptions, width, height) {
     const legendW = Math.round(mm(60));
     const legendH = Math.round(mm(3.6));
     const legendX = Math.round((width - legendW) / 2);
-    const gradient = ctx.createLinearGradient(legendX, 0, legendX + legendW, 0);
-    for (const [elevation, color] of colorStops) {
-      const position = Math.max(0, Math.min(1, (elevation - colorMin) / (colorMax - colorMin)));
-      gradient.addColorStop(position, `rgb(${color.join(',')})`);
+    for (let index = 0; index < colorStops.length; index++) {
+      const [elevation, color] = colorStops[index];
+      const nextElevation = colorStops[index + 1]?.[0] ?? colorMax;
+      const start = Math.max(0, Math.min(1, (elevation - colorMin) / (colorMax - colorMin)));
+      const end = Math.max(start, Math.min(1, (nextElevation - colorMin) / (colorMax - colorMin)));
+      ctx.fillStyle = `rgb(${color.join(',')})`;
+      ctx.fillRect(legendX + legendW * start, infoY, Math.max(1, legendW * (end - start)), legendH);
     }
-    ctx.fillStyle = gradient;
-    ctx.fillRect(legendX, infoY, legendW, legendH);
     ctx.strokeStyle = 'rgba(37,53,46,.4)';
     ctx.lineWidth = Math.max(1, mm(.22));
     ctx.strokeRect(legendX, infoY, legendW, legendH);

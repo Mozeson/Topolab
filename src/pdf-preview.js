@@ -1,7 +1,7 @@
 const byId = (id) => document.getElementById(id);
 const DEFAULT_PDF_OPTIONS = Object.freeze({
   mapStyle: 'shaded',
-  tintOpacity: 0.85,
+  tintOpacity: 0.55,
   showGrid: true,
   showCoordinates: true,
   showLegend: true,

@@ -83,6 +83,15 @@ function heightColor(h, editing = false) {
   return c;
 }
 
+function hypsometricBandColor(height) {
+  let color = colorStops[0][1];
+  for (const [threshold, nextColor] of colorStops) {
+    if (height < threshold) break;
+    color = nextColor;
+  }
+  return color;
+}
+
 function terrainStats() {
   let min = Infinity;
   let max = -Infinity;
@@ -586,7 +595,7 @@ function drawPrintBlock(ctx, w, h, dpr, options = {}) {
       for (let x = 0; x < N; x++) {
         const index = y * N + x;
         const shade = options.mapStyle === 'shaded' ? hillshade(x, y) : 1;
-        const [red, green, blue] = heightColor(heights[index], false);
+        const [red, green, blue] = hypsometricBandColor(heights[index]);
         const pixel = index * 4;
         image.data[pixel] = clamp(red * shade, 0, 255);
         image.data[pixel + 1] = clamp(green * shade, 0, 255);
@@ -596,7 +605,7 @@ function drawPrintBlock(ctx, w, h, dpr, options = {}) {
     }
     printRasterCtx.putImageData(image, 0, 0);
     ctx.save();
-    ctx.globalAlpha = clamp(options.tintOpacity ?? .85, 0, 1);
+    ctx.globalAlpha = clamp(options.tintOpacity ?? .55, 0, .7);
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
     ctx.drawImage(printRaster, 0, 0, w, h);

@@ -19,6 +19,33 @@ const TRAIL_COLORS = {
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 const distance = (a, b) => Math.hypot(a.u - b.u, a.v - b.v);
 const isWater = (type) => MAP_FEATURE_TYPES[type]?.family === 'water';
+const cleanRoadNumber = (value = '') => String(value).replace(/\D/g, '').slice(0, 4);
+
+function polylineMidpoint(points, xKey, yKey) {
+  if (points.length < 2) return null;
+  const lengths = [];
+  let total = 0;
+  for (let i = 1; i < points.length; i++) {
+    const length = Math.hypot(points[i][xKey] - points[i - 1][xKey], points[i][yKey] - points[i - 1][yKey]);
+    lengths.push(length);
+    total += length;
+  }
+  if (!total) return { [xKey]: points[0][xKey], [yKey]: points[0][yKey] };
+  const target = total / 2;
+  let travelled = 0;
+  for (let i = 1; i < points.length; i++) {
+    const length = lengths[i - 1];
+    if (travelled + length >= target) {
+      const t = (target - travelled) / (length || 1);
+      return {
+        [xKey]: points[i - 1][xKey] + (points[i][xKey] - points[i - 1][xKey]) * t,
+        [yKey]: points[i - 1][yKey] + (points[i][yKey] - points[i - 1][yKey]) * t,
+      };
+    }
+    travelled += length;
+  }
+  return { [xKey]: points.at(-1)[xKey], [yKey]: points.at(-1)[yKey] };
+}
 
 function strokePolyline(ctx, points, width, color, dash = []) {
   if (points.length < 2) return;
@@ -75,6 +102,45 @@ function drawFlowArrow(ctx, points, color, dpr) {
   ctx.restore();
 }
 
+function roundedRectPath(ctx, x, y, width, height, radius) {
+  const r = Math.min(radius, width / 2, height / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + width, y, x + width, y + height, r);
+  ctx.arcTo(x + width, y + height, x, y + height, r);
+  ctx.arcTo(x, y + height, x, y, r);
+  ctx.arcTo(x, y, x + width, y, r);
+  ctx.closePath();
+}
+
+function drawRoadNumber(ctx, points, roadNumber, dpr) {
+  const number = cleanRoadNumber(roadNumber);
+  const midpoint = polylineMidpoint(points, 'x', 'y');
+  if (!number || !midpoint) return;
+  const fontSize = 10 * dpr;
+  ctx.save();
+  ctx.font = `700 ${fontSize}px Arial, sans-serif`;
+  ctx.direction = 'ltr';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  const width = Math.max(22 * dpr, ctx.measureText(number).width + 10 * dpr);
+  const height = 17 * dpr;
+  const x = midpoint.x - width / 2;
+  const y = midpoint.y - height / 2;
+  ctx.shadowColor = 'rgba(25,40,34,.18)';
+  ctx.shadowBlur = 3 * dpr;
+  roundedRectPath(ctx, x, y, width, height, 4 * dpr);
+  ctx.fillStyle = '#fffdf5';
+  ctx.fill();
+  ctx.shadowColor = 'transparent';
+  ctx.lineWidth = 1.2 * dpr;
+  ctx.strokeStyle = '#37433e';
+  ctx.stroke();
+  ctx.fillStyle = '#25322d';
+  ctx.fillText(number, midpoint.x, midpoint.y + .4 * dpr);
+  ctx.restore();
+}
+
 function drawFeature2D(ctx, canvas, dpr, feature, previewPoint = null) {
   const source = previewPoint ? [...feature.points, previewPoint] : feature.points;
   const points = source.map((point) => ({ x: point.u * canvas.width, y: point.v * canvas.height }));
@@ -90,6 +156,7 @@ function drawFeature2D(ctx, canvas, dpr, feature, previewPoint = null) {
   } else if (feature.type === 'road') {
     strokePolyline(ctx, points, 7 * dpr, '#454b48');
     strokePolyline(ctx, points, 4.6 * dpr, '#e9c77b');
+    drawRoadNumber(ctx, points, feature.roadNumber, dpr);
   } else if (feature.type === 'perennialStream') {
     strokePolyline(ctx, points, 3 * dpr, '#237eb1');
     drawFlowArrow(ctx, points, '#237eb1', dpr);
@@ -125,8 +192,11 @@ function samplePolyline(points, step = .008) {
 function disposeObject(object) {
   object.traverse((child) => {
     child.geometry?.dispose?.();
-    if (Array.isArray(child.material)) child.material.forEach((material) => material.dispose());
-    else child.material?.dispose?.();
+    if (Array.isArray(child.material)) child.material.forEach((material) => { material.map?.dispose?.(); material.dispose(); });
+    else {
+      child.material?.map?.dispose?.();
+      child.material?.dispose?.();
+    }
   });
 }
 
@@ -182,6 +252,41 @@ function makeRibbon(api, points, width, color, options = {}) {
   return new THREE.Mesh(geometry, material);
 }
 
+function makeRoadNumberSprite(api, feature) {
+  const number = cleanRoadNumber(feature.roadNumber);
+  const midpoint = polylineMidpoint(feature.points, 'u', 'v');
+  if (!number || !midpoint) return null;
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 128;
+  const ctx = canvas.getContext('2d');
+  roundedRectPath(ctx, 20, 22, 216, 84, 24);
+  ctx.fillStyle = '#fffdf5';
+  ctx.fill();
+  ctx.lineWidth = 8;
+  ctx.strokeStyle = '#37433e';
+  ctx.stroke();
+  ctx.fillStyle = '#25322d';
+  ctx.font = '700 62px Arial, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.direction = 'ltr';
+  ctx.fillText(number, 128, 67);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.minFilter = THREE.LinearFilter;
+  const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false });
+  const sprite = new THREE.Sprite(material);
+  sprite.position.set(
+    (midpoint.u - .5) * api.worldSize(),
+    api.height(midpoint.u, midpoint.v) * api.verticalScale() + .26,
+    (midpoint.v - .5) * api.worldSize(),
+  );
+  sprite.scale.set(.72, .36, 1);
+  sprite.renderOrder = 8;
+  return sprite;
+}
+
 function addFeature3D(api, group, feature) {
   const add = (mesh) => { if (mesh) group.add(mesh); };
   if (feature.type === 'trail') {
@@ -195,6 +300,7 @@ function addFeature3D(api, group, feature) {
   } else if (feature.type === 'road') {
     add(makeRibbon(api, feature.points, .16, 0x4f5551));
     add(makeRibbon(api, feature.points, .11, 0xd6b56d, { lift: .023 }));
+    add(makeRoadNumberSprite(api, feature));
   } else if (feature.type === 'perennialStream') {
     add(makeRibbon(api, feature.points, .075, 0x258dc3, { water: true, lift: .025 }));
   } else if (feature.type === 'intermittentStream') {
@@ -266,14 +372,21 @@ export function createMapFeatures(api) {
     const warning = features.some((feature) => isWater(feature.type) && feature.validation?.valid === false)
       ? '<span class="feature-validation-warning">⚠ נחל עולה בשטח</span>'
       : '';
-    legend.innerHTML = used.map((type) => `<span class="feature-legend-item feature-${type}"><i></i>${MAP_FEATURE_TYPES[type].label}</span>`).join('') + warning;
+    const roadNumbers = [...new Set(features.filter((feature) => feature.type === 'road' && feature.roadNumber).map((feature) => feature.roadNumber))];
+    legend.innerHTML = used.map((type) => {
+      const label = type === 'road' && roadNumbers.length ? `כביש ${roadNumbers.join(', ')}` : MAP_FEATURE_TYPES[type].label;
+      return `<span class="feature-legend-item feature-${type}"><i></i>${label}</span>`;
+    }).join('') + warning;
   }
 
   function updateStatus(message = '') {
     const status = document.getElementById('featureStatus');
     const triggerLabel = document.querySelector('#featuresBtn span');
     const activeLabel = activeType ? MAP_FEATURE_TYPES[activeType].label : null;
-    triggerLabel.textContent = activeLabel ? `תכסית: ${activeLabel}` : 'תכסית';
+    const roadNumber = activeType === 'road' ? cleanRoadNumber(document.getElementById('roadNumberInput').value) : '';
+    const displayLabel = roadNumber ? `${activeLabel} ${roadNumber}` : activeLabel;
+    triggerLabel.textContent = displayLabel ? `תכסית: ${displayLabel}` : 'תכסית';
+    document.getElementById('roadNumberControl').hidden = activeType !== 'road';
     document.getElementById('finishFeatureBtn').disabled = !draft || draft.points.length < 2;
     document.getElementById('cancelFeatureBtn').disabled = !draft && !activeType;
     document.getElementById('removeLastFeatureBtn').disabled = features.length === 0;
@@ -286,8 +399,8 @@ export function createMapFeatures(api) {
       button.setAttribute('aria-pressed', String(selected));
     }
     if (message) status.textContent = message;
-    else if (draft) status.textContent = `${activeLabel}: ${draft.points.length} נקודות. לחיצה כפולה או Enter לסיום.`;
-    else if (activeType) status.textContent = `${activeLabel}: לחצו על המפה ממקום למקום. בנחל—ציירו מהמעלה למורד.`;
+    else if (draft) status.textContent = `${displayLabel}: ${draft.points.length} נקודות. לחיצה כפולה או Enter לסיום.`;
+    else if (activeType) status.textContent = `${displayLabel}: לחצו על המפה ממקום למקום. בנחל—ציירו מהמעלה למורד.`;
     else if (features.length) status.textContent = `נוספו ${features.length} פריטי תכסית למפה.`;
     else status.textContent = 'בחרו סוג קו ואז לחצו לאורך המסלול במפה.';
   }
@@ -318,6 +431,7 @@ export function createMapFeatures(api) {
       draft = {
         type: activeType,
         color: document.getElementById('trailColorSelect').value,
+        roadNumber: activeType === 'road' ? cleanRoadNumber(document.getElementById('roadNumberInput').value) : '',
         points: [],
       };
     }
@@ -341,7 +455,13 @@ export function createMapFeatures(api) {
       updateStatus('נדרשות לפחות שתי נקודות כדי ליצור קו.');
       return false;
     }
-    const feature = { id: nextId++, type: draft.type, color: draft.color, points: draft.points.map((point) => ({ ...point })) };
+    const feature = {
+      id: nextId++,
+      type: draft.type,
+      color: draft.color,
+      roadNumber: draft.type === 'road' ? cleanRoadNumber(draft.roadNumber) : '',
+      points: draft.points.map((point) => ({ ...point })),
+    };
     feature.validation = validateFeature(feature);
     features.push(feature);
     draft = null;
@@ -355,7 +475,8 @@ export function createMapFeatures(api) {
       updateStatus(`הנחל תקין טופוגרפית ויורד בכ־${Math.round(drop)} מ׳ מתחילתו לסופו.`);
       api.notify('הנחל עובר בירידה רציפה ומתאים לתבליט.');
     } else {
-      updateStatus(`${MAP_FEATURE_TYPES[feature.type].label} נוסף למפה.`);
+      const label = feature.type === 'road' && feature.roadNumber ? `כביש ${feature.roadNumber}` : MAP_FEATURE_TYPES[feature.type].label;
+      updateStatus(`${label} נוסף למפה.`);
     }
     redrawAll();
     return true;
@@ -436,6 +557,13 @@ export function createMapFeatures(api) {
   document.getElementById('removeLastFeatureBtn').addEventListener('click', removeLast);
   document.getElementById('trailColorSelect').addEventListener('change', (event) => {
     if (draft?.type === 'markedTrail') draft.color = event.target.value;
+    api.redraw();
+  });
+  document.getElementById('roadNumberInput').addEventListener('input', (event) => {
+    const cleaned = cleanRoadNumber(event.target.value);
+    if (event.target.value !== cleaned) event.target.value = cleaned;
+    if (draft?.type === 'road') draft.roadNumber = cleaned;
+    updateStatus();
     api.redraw();
   });
   updateStatus();
