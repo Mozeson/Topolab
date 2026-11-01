@@ -500,6 +500,7 @@ export function createNavGame(api) {
     mapCard.classList.remove('expanded', 'peeking');
     mapCard.hidden = mode !== 'always';
     mapCard.classList.toggle('above-peek', mode === 'peek');
+    hud.classList.remove('peek-open');
     $('navPeekBtn').hidden = mode !== 'peek';
     $('navMapNote').textContent = mode === 'peek' ? `+${PEEK_PENALTY} ש׳ לכל הצצה` : settings.showPosition ? 'המיקום שלכם מסומן' : '';
     updatePeekUI();
@@ -513,6 +514,20 @@ export function createNavGame(api) {
     $('navPenalty').textContent = `עונש הצצות: +${penalty} ש׳`;
   }
 
+  // Phones show the map as a thumbnail that opens into a large sheet on tap.
+  const compactLayout = matchMedia('(max-width: 640px), (pointer: coarse) and (max-height: 500px)');
+  function setExpanded(value) {
+    run.expanded = value;
+    mapCard.classList.toggle('expanded', value);
+    refreshMapCard();
+  }
+  mapCard.addEventListener('click', (event) => {
+    if (!compactLayout.matches || !run || phase !== 'running') return;
+    if (event.target.closest('button')) return; // the header button has its own handler
+    if (settings.mapMode === 'peek') toggleMap(); // tapping a peeked map puts it away
+    else setExpanded(!run.expanded);
+  });
+
   // Draw the map card right away (used whenever it opens or changes size).
   function refreshMapCard() {
     mapTimer = .12;
@@ -522,27 +537,28 @@ export function createNavGame(api) {
   function toggleMap() {
     if (phase !== 'running') return;
     if (settings.mapMode === 'always') {
-      run.expanded = !run.expanded;
-      mapCard.classList.toggle('expanded', run.expanded);
-      refreshMapCard();
+      setExpanded(!run.expanded);
     } else if (settings.mapMode === 'peek') {
       run.peekOpen = !run.peekOpen;
       if (run.peekOpen) {
         run.peeks++;
         mapCard.hidden = false;
         mapCard.classList.add('peeking');
-        refreshMapCard();
+        setExpanded(compactLayout.matches); // on a phone a peek is only useful at full size
         beep([[330, .08]]);
       } else {
         mapCard.hidden = true;
         mapCard.classList.remove('peeking');
+        setExpanded(false);
       }
+      hud.classList.toggle('peek-open', run.peekOpen);
       updatePeekUI();
     }
   }
   $('navPeekBtn').addEventListener('click', toggleMap);
   $('navMapSizeBtn').addEventListener('click', () => {
-    if (settings.mapMode === 'peek') { run.expanded = !run.expanded; mapCard.classList.toggle('expanded', run.expanded); refreshMapCard(); }
+    if (settings.mapMode === 'peek' && compactLayout.matches) toggleMap(); // phone: the header button closes the peek
+    else if (settings.mapMode === 'peek') setExpanded(!run.expanded);
     else toggleMap();
   });
 

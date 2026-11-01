@@ -1603,6 +1603,7 @@ function enterGameMode() {
   state.navigating = true;
   state.exaggeration = 1;
   $('toast').hidden = true;
+  document.querySelector('#zoomJoystick .joystick-tag').textContent = 'מבט'; // in the game this stick tilts the view
   document.body.classList.add('navigating');
   Object.assign(state.observer, { placed: true, firstPerson: true, placing: false });
   if (controls) controls.enabled = false;
@@ -1620,6 +1621,7 @@ function exitGameMode() {
   if (!state.navigating) return;
   state.navigating = false;
   document.body.classList.remove('navigating');
+  document.querySelector('#zoomJoystick .joystick-tag').textContent = 'קירוב';
   state.exaggeration = gameSaved?.exaggeration ?? state.exaggeration;
   if (scene && gameSaved) {
     scene.fog = gameSaved.fog;
