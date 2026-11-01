@@ -271,14 +271,10 @@ export function createMapFeatures(api) {
 
   function updateStatus(message = '') {
     const status = document.getElementById('featureStatus');
-    const triggerLabel = document.querySelector('#featuresBtn span');
     const activeLabel = activeType ? MAP_FEATURE_TYPES[activeType].label : null;
-    triggerLabel.textContent = activeLabel ? `תכסית: ${activeLabel}` : 'תכסית';
     document.getElementById('finishFeatureBtn').disabled = !draft || draft.points.length < 2;
-    document.getElementById('cancelFeatureBtn').disabled = !draft && !activeType;
+    document.getElementById('cancelFeatureBtn').disabled = !draft;
     document.getElementById('removeLastFeatureBtn').disabled = features.length === 0;
-    document.getElementById('featuresBtn').classList.toggle('active', Boolean(activeType));
-    document.getElementById('featuresBtn').setAttribute('aria-pressed', String(Boolean(activeType)));
     document.getElementById('mapCanvas').classList.toggle('drawing-feature', Boolean(activeType));
     for (const button of document.querySelectorAll('[data-feature-type]')) {
       const selected = button.dataset.featureType === activeType;
@@ -294,11 +290,8 @@ export function createMapFeatures(api) {
 
   function activate(type) {
     if (!MAP_FEATURE_TYPES[type]) return;
-    api.prepareDrawing();
-    if (activeType === type) {
-      cancel(true);
-      return;
-    }
+    api.prepareDrawing(type);
+    if (activeType === type) return;
     activeType = type;
     draft = null;
     hoverPoint = null;
@@ -358,6 +351,7 @@ export function createMapFeatures(api) {
       updateStatus(`${MAP_FEATURE_TYPES[feature.type].label} נוסף למפה.`);
     }
     redrawAll();
+    api.changed?.();
     return true;
   }
 
@@ -375,12 +369,13 @@ export function createMapFeatures(api) {
     updateLegend();
     updateStatus(`${MAP_FEATURE_TYPES[removed.type].label} האחרון הוסר.`);
     redrawAll();
+    api.changed?.();
   }
 
   function handleKey(event) {
     if (!activeType) return false;
     if (event.key === 'Enter') finish();
-    else if (event.key === 'Escape') cancel(true);
+    else if (event.key === 'Escape' && draft) cancel(false);
     else if (event.key === 'Backspace' && draft?.points.length) {
       draft.points.pop();
       updateStatus();
@@ -425,6 +420,27 @@ export function createMapFeatures(api) {
     rebuild3D();
   }
 
+  function serialize() {
+    return features.map(({ type, color, points }) => ({ type, color, points: points.map(({ u, v }) => ({ u, v })) }));
+  }
+
+  function load(list = []) {
+    features.length = 0;
+    for (const item of list) {
+      if (!MAP_FEATURE_TYPES[item?.type] || !Array.isArray(item.points) || item.points.length < 2) continue;
+      features.push({ id: nextId++, type: item.type, color: item.color || 'red', points: item.points.map(({ u, v }) => ({ u: clamp(u, 0, 1), v: clamp(v, 0, 1) })) });
+    }
+    cancel(false);
+    refreshValidation();
+    updateLegend();
+    updateStatus();
+    rebuild3D();
+  }
+
+  function clearAll() {
+    load([]);
+  }
+
   function stats() {
     const invalidStreams = features.filter((feature) => isWater(feature.type) && feature.validation?.valid === false).length;
     return { count: features.length, invalidStreams, activeType, drafting: Boolean(draft) };
@@ -432,7 +448,7 @@ export function createMapFeatures(api) {
 
   document.querySelectorAll('[data-feature-type]').forEach((button) => button.addEventListener('click', () => activate(button.dataset.featureType)));
   document.getElementById('finishFeatureBtn').addEventListener('click', finish);
-  document.getElementById('cancelFeatureBtn').addEventListener('click', () => cancel(true));
+  document.getElementById('cancelFeatureBtn').addEventListener('click', () => cancel(false));
   document.getElementById('removeLastFeatureBtn').addEventListener('click', removeLast);
   document.getElementById('trailColorSelect').addEventListener('change', (event) => {
     if (draft?.type === 'markedTrail') draft.color = event.target.value;
@@ -451,6 +467,12 @@ export function createMapFeatures(api) {
     resize,
     cancel,
     stats,
+    activate,
+    serialize,
+    load,
+    clearAll,
     get active() { return Boolean(activeType); },
+    get activeType() { return activeType; },
+    get drafting() { return Boolean(draft); },
   };
 }
