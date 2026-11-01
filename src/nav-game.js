@@ -701,26 +701,38 @@ export function createNavGame(api) {
     if (phase === 'idle') return;
     const o = api.observer;
     if (phase === 'running') {
-      const axes = api.axes() || { x: 0, y: 0, aux: 0 };
+      // Twin-stick on touch screens: left stick moves (forward/back, sideways steps),
+      // right stick looks (turn left/right, tilt up/down). Keyboard: WASD/arrows.
+      const sticks = api.axes()?.sticks || { move: { x: 0, y: 0 }, look: { x: 0, y: 0 } };
       const has = (...codes) => codes.some((c) => keys.has(c));
-      const forward = clamp((has('KeyW', 'ArrowUp') ? 1 : 0) - (has('KeyS', 'ArrowDown') ? 1 : 0) + axes.y, -1, 1);
-      const turn = clamp((has('KeyD', 'ArrowRight') ? 1 : 0) - (has('KeyA', 'ArrowLeft') ? 1 : 0) + axes.x, -1, 1);
-      const running = has('ShiftLeft', 'ShiftRight');
+      const forward = clamp((has('KeyW', 'ArrowUp') ? 1 : 0) - (has('KeyS', 'ArrowDown') ? 1 : 0) + sticks.move.y, -1, 1);
+      const strafe = clamp(sticks.move.x, -1, 1);
+      const turn = clamp((has('KeyD', 'ArrowRight') ? 1 : 0) - (has('KeyA', 'ArrowLeft') ? 1 : 0) + sticks.look.x, -1, 1);
+      const running = has('ShiftLeft', 'ShiftRight') || Math.hypot(sticks.move.x, sticks.move.y) > .97;
       run.elapsed += dt;
       o.heading = (o.heading + turn * TURN_SPEED * dt + 360) % 360;
-      o.tilt = clamp(o.tilt + axes.aux * 50 * dt, -40, 35);
+      o.tilt = clamp(o.tilt + sticks.look.y * 50 * dt, -40, 35);
       const extent = api.extent();
-      if (forward !== 0) {
-        const dir = Math.sign(forward);
+      const moving = Math.hypot(forward, strafe) > .05;
+      if (moving) {
+        // Direction of travel: forward/back along the heading plus a sideways component.
         const rad = o.heading * Math.PI / 180;
-        const dx = Math.sin(rad) * dir;
-        const dy = -Math.cos(rad) * dir;
+        const fx = Math.sin(rad);
+        const fy = -Math.cos(rad);
+        const sideFactor = .7;
+        let dx = fx * forward + -fy * strafe * sideFactor;
+        let dy = fy * forward + fx * strafe * sideFactor;
+        const magnitude = Math.hypot(dx, dy) || 1;
+        const input = Math.min(1, magnitude);
+        dx /= magnitude;
+        dy /= magnitude;
+        const dir = forward < -.05 && Math.abs(forward) >= Math.abs(strafe) ? -1 : 1;
         const here = api.height(o.u, o.v);
         const probe = 8 / extent;
         const ahead = api.height(clamp(o.u + dx * probe, 0, 1), clamp(o.v + dy * probe, 0, 1));
         run.grade = (ahead - here) / 8;
         run.pace = slopeSpeedFactor(run.grade);
-        const speed = baseSpeed(extent) * (running ? RUN_FACTOR : 1) * (dir < 0 ? BACK_FACTOR : 1) * Math.abs(forward) * run.pace;
+        const speed = baseSpeed(extent) * (running ? RUN_FACTOR : 1) * (dir < 0 ? BACK_FACTOR : 1) * input * run.pace;
         const nu = clamp(o.u + dx * speed * dt / extent, .002, .998);
         const nv = clamp(o.v + dy * speed * dt / extent, .002, .998);
         const step = distanceMeters(o, { u: nu, v: nv }, extent);
@@ -859,6 +871,10 @@ export function createNavGame(api) {
       const next = points[run?.next];
       if (!next || phase !== 'running') return;
       Object.assign(api.observer, { u: next.u + .001, v: next.v });
+    },
+    // Test hook: stand at a map position with a heading.
+    debugPlace(u, v, heading = 0) {
+      if (run) Object.assign(api.observer, { u, v, heading, tilt: -6 });
     },
     // Test hook: stand `meters` south of the next control, facing it.
     debugApproach(meters = 60) {

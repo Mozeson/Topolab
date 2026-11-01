@@ -130,8 +130,13 @@ function disposeObject(object) {
   });
 }
 
+// Ribbons are built in one of two scales:
+// - overview (default): widths/lift in world units, exaggerated so lines read on the
+//   whole-map 3D model;
+// - ground (api.groundMode(), the navigation game): real sizes in metres, sitting just
+//   above the terrain and sampled every few metres so they follow it.
 function makeRibbon(api, points, width, color, options = {}) {
-  const sampled = samplePolyline(points);
+  const sampled = samplePolyline(points, options.step);
   if (sampled.length < 2) return null;
   const vertices = [];
   const indices = [];
@@ -152,8 +157,9 @@ function makeRibbon(api, points, width, color, options = {}) {
     const nz = (bx - ax) / length;
     const lateral = options.lateral || 0;
     const half = width / 2;
-    const ay = api.height(a.u, a.v) * api.verticalScale() + (options.lift || .016);
-    const by = api.height(b.u, b.v) * api.verticalScale() + (options.lift || .016);
+    const ground = options.surface || api.height;
+    const ay = ground(a.u, a.v) * api.verticalScale() + (options.lift || .016);
+    const by = ground(b.u, b.v) * api.verticalScale() + (options.lift || .016);
     vertices.push(
       ax + nx * (lateral - half), ay, az + nz * (lateral - half),
       ax + nx * (lateral + half), ay, az + nz * (lateral + half),
@@ -182,8 +188,40 @@ function makeRibbon(api, points, width, color, options = {}) {
   return new THREE.Mesh(geometry, material);
 }
 
+// Real-world look for the first-person view. Sizes in metres.
+const GROUND_STYLES = {
+  trail: [{ width: 1.2, color: 0x7d6a4c }],
+  markedTrail: [{ width: 1.3, color: 0x7d6a4c }, { width: .3, colorFrom: 'trail', dashed: true, dash: 4, lift: .18 }],
+  dirtRoad: [{ width: 3.6, color: 0x9a7d55 }, { width: .5, color: 0x5f4b31, lateral: -.95, lift: .16 }, { width: .5, color: 0x5f4b31, lateral: .95, lift: .16 }],
+  road: [{ width: 6.5, color: 0x4c514e }, { width: .18, color: 0xf1e7c4, dashed: true, dash: 4, lift: .17 }],
+  perennialStream: [{ width: 3.2, color: 0x2f86ba, water: true }],
+  intermittentStream: [{ width: 2.6, color: 0xc4b89c }],
+};
+
+function addGroundFeature3D(api, group, feature) {
+  const mtw = api.metersToWorld();
+  const extent = api.worldSize() / mtw;
+  // A vertex every ~4 m (and at least three per grid cell) keeps the ribbon on the ground.
+  const cell = extent / Math.max(1, api.gridSize() - 1);
+  const step = Math.min(4, cell / 3) / extent;
+  for (const layer of GROUND_STYLES[feature.type] || []) {
+    const color = layer.colorFrom === 'trail' ? new THREE.Color(TRAIL_COLORS[feature.color] || TRAIL_COLORS.red) : layer.color;
+    const mesh = makeRibbon(api, feature.points, layer.width * mtw, color, {
+      step,
+      lateral: (layer.lateral || 0) * mtw,
+      lift: (layer.lift ?? .12) * mtw,
+      dashed: layer.dashed,
+      dashLength: (layer.dash || 1) * mtw,
+      water: layer.water,
+      surface: api.surfaceHeight,
+    });
+    if (mesh) group.add(mesh);
+  }
+}
+
 function addFeature3D(api, group, feature) {
   const add = (mesh) => { if (mesh) group.add(mesh); };
+  if (api.groundMode?.()) { addGroundFeature3D(api, group, feature); return; }
   if (feature.type === 'trail') {
     add(makeRibbon(api, feature.points, .035, 0x3c3c34, { dashed: true, dashLength: .12 }));
   } else if (feature.type === 'markedTrail') {

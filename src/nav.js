@@ -80,7 +80,12 @@ export function initNavigation(keyTarget, moveStick, auxStick) {
       x = clampAxis(x);
       y = clampAxis(y);
       auxY = clampAxis(auxY);
-      return { x, y, aux: auxY, active: x !== 0 || y !== 0 || auxY !== 0 };
+      return {
+        x, y, aux: auxY, active: x !== 0 || y !== 0 || auxY !== 0,
+        // Raw stick positions (no keyboard mixed in) for the navigation game's
+        // twin-stick layout: left = move, right = look.
+        sticks: { move: { x: move.x, y: move.y }, look: { x: aux.x, y: aux.y } },
+      };
     },
   };
 }

@@ -583,6 +583,24 @@ function sampleHeight(u, v) {
   return lerp(top, bottom, ty);
 }
 
+// Height (m) on the rendered terrain surface: the mesh splits each grid cell into the
+// triangles (x,y)-(x,y+1)-(x+1,y) and (x+1,y)-(x,y+1)-(x+1,y+1), so things laid on the
+// ground (roads in the navigation game) use the same interpolation and never sink into it.
+function surfaceHeight(u, v) {
+  const gx = clamp(u, 0, 1) * (N - 1);
+  const gy = clamp(v, 0, 1) * (N - 1);
+  const x0 = Math.min(N - 2, Math.floor(gx));
+  const y0 = Math.min(N - 2, Math.floor(gy));
+  const fx = gx - x0;
+  const fy = gy - y0;
+  const a = heights[y0 * N + x0];
+  const b = heights[y0 * N + x0 + 1];
+  const c = heights[(y0 + 1) * N + x0];
+  const d = heights[(y0 + 1) * N + x0 + 1];
+  if (fx + fy <= 1) return a + (b - a) * fx + (c - a) * fy;
+  return d + (c - d) * (1 - fx) + (b - d) * (1 - fy);
+}
+
 function drawMap() {
   if (!mapCanvas.width || !mapCanvas.height) return;
   mapCtx.clearRect(0, 0, mapCanvas.width, mapCanvas.height);
@@ -2215,6 +2233,7 @@ window.__seek = () => {
 window.__play = () => {};
 window.__NAV_TELEPORT__ = () => navGame?.debugTeleport();
 window.__NAV_LOOK_AT_NEXT__ = (meters) => navGame?.debugApproach(meters);
+window.__NAV_PLACE__ = (u, v, heading) => navGame?.debugPlace(u, v, heading);
 window.__APP_STATS__ = () => ({
   gridVertices: N * N,
   gridResolution: N,
@@ -2257,6 +2276,9 @@ sheepGame = createSheepGame({
 });
 mapFeatures = createMapFeatures({
   scene: () => scene,
+  groundMode: () => state.navigating, // real-size, ground-level roads in the navigation game
+  metersToWorld,
+  surfaceHeight,
   worldSize: () => WORLD_SIZE,
   gridSize: () => N,
   height: sampleHeight,
