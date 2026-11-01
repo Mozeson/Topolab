@@ -201,6 +201,9 @@
               <button class="rail-tool" id="smoothBtn" type="button" data-tool="smooth" aria-pressed="false" data-shortcut="tool-smooth">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 15c3-4 5-6 9-6s6 2 9 6"/><path d="M3 19h18" opacity=".55"/></svg><span>החלקה</span>
               </button>
+              <button class="rail-tool" id="shapeBtn" type="button" data-tool="smudge" aria-pressed="false" data-shortcut="tool-smudge" data-title="עיצוב השטח: מריחה, צביטה, השטחה">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 17c3-1 4-5 7-5s3 4 6 4 4-3 5-4"/><path d="m14 5 3 3-3 3" opacity=".7"/><path d="M7 8h10" opacity=".7"/></svg><span>עיצוב</span>
+              </button>
               <button class="rail-tool" id="panMapBtn" type="button" data-tool="pan" aria-pressed="false" data-shortcut="tool-pan">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 11V6a2 2 0 0 1 4 0v4-2a2 2 0 0 1 4 0v3-1a2 2 0 0 1 4 0v4c0 4-3 7-7 7h-1c-3 0-5-1-7-4l-3-4a2 2 0 0 1 3-2l3 3"/></svg><span>הזזה</span>
               </button>
@@ -235,6 +238,11 @@
             <div class="options-bar" id="optionsBar" aria-label="אפשרויות הכלי">
               <div class="options-group" id="sculptOptions">
                 <span class="options-tool" id="toolMode">הגבהה</span>
+                <div class="shape-modes" id="shapeModes" role="radiogroup" aria-label="סוג העיצוב" hidden>
+                  <button type="button" role="radio" data-shape="smudge" aria-checked="true" title="מריחה (M)">מריחה</button>
+                  <button type="button" role="radio" data-shape="pinch" aria-checked="false" title="צביטה (P) · Alt להרחבה">צביטה</button>
+                  <button type="button" role="radio" data-shape="flatten" aria-checked="false" title="השטחה (E)">השטחה</button>
+                </div>
                 <label class="inline-range" for="brushRange" title="קוטר המברשת במטרים ([ / ])">
                   <span>קוטר</span>
                   <input id="brushRange" type="range" min="170" max="4000" value="1920" step="5">
@@ -245,6 +253,7 @@
                   <input id="strengthRange" type="range" min="2" max="40" value="14" step="2">
                   <output id="strengthValue" for="strengthRange">14 מ׳/ש׳</output>
                 </label>
+                <span class="shape-hint" id="shapeHint" hidden></span>
                 <span class="options-hint" id="sculptHint"><kbd>Alt</kbd> היפוך · <kbd>Shift</kbd> החלקה · <kbd>רווח</kbd> הזזה</span>
               </div>
               <div class="options-group" id="panOptions" hidden>
@@ -368,7 +377,6 @@
             <button class="preset-button" type="button" data-preset="ridge"><svg viewBox="0 0 48 28" aria-hidden="true"><path d="M3 24 15 9l7 7 8-12 15 20H3Z"/></svg>רכס</button>
             <button class="preset-button" type="button" data-preset="valley"><svg viewBox="0 0 48 28" aria-hidden="true"><path d="M3 5c8 0 10 19 21 19s13-19 21-19H3Z"/></svg>עמק</button>
             <button class="preset-button" type="button" data-preset="crater"><svg viewBox="0 0 48 28" aria-hidden="true"><path d="M3 24C10 24 9 5 17 5c5 0 4 12 7 12s2-12 7-12c8 0 7 19 14 19H3Z"/></svg>מכתש</button>
-            <button class="preset-button" type="button" id="resetBtn"><svg viewBox="0 0 48 28" aria-hidden="true"><path d="M3 20h42"/></svg>משטח שטוח</button>
           </div>
           <p class="popover-section-title">מפה אקראית</p>
           <button class="button button-primary random-quick" id="randomTerrainBtn" type="button">
@@ -389,6 +397,13 @@
             <p class="popover-note">אותו מספר ואותן הגדרות יוצרים את אותו תבליט.</p>
             <button class="footer-button" id="generateTerrainBtn" type="button">יצירה לפי ההגדרות</button>
           </details>
+          <p class="popover-section-title">ניקוי המפה</p>
+          <div class="reset-grid">
+            <button class="reset-button" type="button" data-reset="terrain"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 18 6-9 4 6 3-4 5 7"/></svg><span>תבליט</span><small></small></button>
+            <button class="reset-button" type="button" data-reset="features"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 18c4-6 7-9 10-9 2 0 3 2 5 2 1 0 2-1 3-3"/></svg><span>תכסית</span><small></small></button>
+            <button class="reset-button" type="button" data-reset="course"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 21V4h12l-3 4 3 4H5"/></svg><span>מסלול</span><small></small></button>
+          </div>
+          <button class="reset-all" type="button" data-reset="all">ניקוי הכול: תבליט, תכסית ומסלול</button>
           <p class="popover-note">כל אפשרות כאן ניתנת לביטול (<kbd>Ctrl</kbd>+<kbd>Z</kbd>).</p>
         </div>
       </section>
@@ -403,7 +418,7 @@
       <button class="icon-button" id="closeHelpBtn" type="button" aria-label="סגירה"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
     </div>
     <ol class="help-steps">
-      <li><span>1</span><div><strong>בחרו כלי בסרגל שליד המפה</strong><p>הגבהה, הנמכה או החלקה. גודל המברשת והעוצמה מופיעים מעל המפה ומשתנים מיד.</p></div></li>
+      <li><span>1</span><div><strong>בחרו כלי בסרגל שליד המפה</strong><p>הגבהה, הנמכה או החלקה, או „עיצוב” שמזיז שטח קיים: מריחה, צביטה (מצר גיא; עם Alt מרחיב) והשטחה. גודל המברשת והעוצמה מופיעים מעל המפה ומשתנים מיד.</p></div></li>
       <li><span>2</span><div><strong>גררו על המפה</strong><p>התלת־ממד משתנה מיד, וטבעת מראה בו את אזור המברשת. ליד הסמן מוצגים הגובה והשיפוע.</p></div></li>
       <li><span>3</span><div><strong>עברו למפה טופוגרפית</strong><p>המתג שבראש המפה מציג קווי גובה. קווים צפופים מציינים שיפוע תלול, וקווים רחוקים מציינים שיפוע מתון.</p></div></li>
       <li><span>4</span><div><strong>תכסית, גשם ותצפית</strong><p>„תכסית” מוסיפה שבילים, דרכים ונחלים. „גשם” מדגים איך מים זורמים. „הצבת אדם” מראה מה רואים מתוך השטח.</p></div></li>

@@ -1,7 +1,8 @@
 // Pure terrain-brush math, kept free of DOM/Three.js so it can be unit-tested.
 // Coordinates are grid cells (0..n-1); `radius` is in cells.
 
-export const SCULPT_TOOLS = ['raise', 'lower', 'smooth'];
+export const SHAPE_TOOLS = ['smudge', 'pinch', 'flatten'];
+export const SCULPT_TOOLS = ['raise', 'lower', 'smooth', ...SHAPE_TOOLS];
 
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
@@ -56,4 +57,53 @@ export function slopePercent(heights, n, x, y, cellMeters) {
   const dx = (heights[yi * n + xp] - heights[yi * n + xm]) / (Math.max(1, xp - xm) * cellMeters);
   const dy = (heights[yp * n + xi] - heights[ym * n + xi]) / (Math.max(1, yp - ym) * cellMeters);
   return Math.hypot(dx, dy) * 100;
+}
+
+// ——— Shape tools: move existing terrain instead of adding or removing height ———
+
+// Bilinear read from a height grid, clamped to its edges.
+function sample(src, n, x, y) {
+  const cx = clamp(x, 0, n - 1);
+  const cy = clamp(y, 0, n - 1);
+  const x0 = Math.min(n - 2, Math.floor(cx));
+  const y0 = Math.min(n - 2, Math.floor(cy));
+  const tx = cx - x0;
+  const ty = cy - y0;
+  const top = src[y0 * n + x0] + (src[y0 * n + x0 + 1] - src[y0 * n + x0]) * tx;
+  const bottom = src[(y0 + 1) * n + x0] + (src[(y0 + 1) * n + x0 + 1] - src[(y0 + 1) * n + x0]) * tx;
+  return top + (bottom - top) * ty;
+}
+
+// Generic warp: every cell inside the brush takes the height found at `source(x, y, falloff)`
+// in a snapshot of the grid. Terrain is moved, not created.
+export function applyWarpBrush(heights, n, gx, gy, radius, source) {
+  const src = Float32Array.from(heights);
+  forEachCell(n, gx, gy, radius, (x, y, falloff) => {
+    const [sx, sy] = source(x, y, falloff);
+    heights[y * n + x] = sample(src, n, sx, sy);
+  });
+}
+
+// Smudge ("מריחה"): drags the terrain along the pointer's motion (dx, dy in cells),
+// most strongly at the brush centre. `strength` 0..1.
+export function applySmudgeBrush(heights, n, gx, gy, radius, dx, dy, strength = 1) {
+  applyWarpBrush(heights, n, gx, gy, radius, (x, y, f) => [x - dx * f * strength, y - dy * f * strength]);
+}
+
+// Pinch ("צביטה"): amount > 0 pulls the terrain towards the brush centre (a valley under
+// the brush gets narrower, a ridge sharper); amount < 0 pushes it outwards ("הרחבה":
+// a valley widens, a dome spreads). |amount| is the fractional pull per stamp.
+export function applyPinchBrush(heights, n, gx, gy, radius, amount) {
+  applyWarpBrush(heights, n, gx, gy, radius, (x, y, f) => {
+    const k = 1 + amount * f;
+    return [gx + (x - gx) * k, gy + (y - gy) * k];
+  });
+}
+
+// Flatten ("השטחה"): pulls heights towards `target` (the height where the stroke began).
+export function applyFlattenBrush(heights, n, gx, gy, radius, target, rate) {
+  forEachCell(n, gx, gy, radius, (x, y, falloff) => {
+    const i = y * n + x;
+    heights[i] += (target - heights[i]) * clamp(rate * falloff, 0, 1);
+  });
 }

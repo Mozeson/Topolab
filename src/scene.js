@@ -7,7 +7,7 @@ import { createMapFeatures } from './map-features.js';
 import { createRainSimulation } from './rain.js';
 import { createPdfPreviewController } from './pdf-preview.js';
 import { createHistory } from './history.js';
-import { applyHeightBrush, applySmoothBrush, slopePercent, SCULPT_TOOLS } from './brush.js';
+import { applyHeightBrush, applySmoothBrush, applySmudgeBrush, applyPinchBrush, applyFlattenBrush, slopePercent, SCULPT_TOOLS, SHAPE_TOOLS } from './brush.js';
 import { createAutosave, loadProject, clearProject } from './persistence.js';
 import { initShortcuts, SHORTCUTS, HOLD_HINTS, shortcutLabel } from './shortcuts.js';
 import { emptyCourse, sanitizeCourse, isRunnable, generateCourse, courseLength, drawCourse, coursePoints, cloneCourse } from './course.js';
@@ -31,9 +31,16 @@ const plinthBox = () => new THREE.BoxGeometry(WORLD_SIZE + .12 * plinthScale(), 
 const EYE_HEIGHT_METERS = 1.7;
 const OBSERVER_FOV = 65;
 let heights = new Float32Array(N * N);
-const TOOL_LABELS = { raise: 'הגבהה', lower: 'הנמכה', smooth: 'החלקה', pan: 'הזזת מפה', features: 'תכסית', course: 'מסלול' };
+const TOOL_LABELS = { raise: 'הגבהה', lower: 'הנמכה', smooth: 'החלקה', smudge: 'מריחה', pinch: 'צביטה', flatten: 'השטחה', pan: 'הזזת מפה', features: 'תכסית', course: 'מסלול' };
+const SHAPE_HINTS = {
+  smudge: 'גררו: השטח נמרח בכיוון התנועה — מאריכים שלוחה, מזיזים פסגה',
+  pinch: 'החזיקו על גיא כדי להצר אותו, על רכס כדי לחדד · Alt: הרחבה ומריחת כיפה',
+  flatten: 'מיישר לגובה הנקודה שבה התחלתם — רמה, מדרגה או אוכף',
+};
 const state = {
-  tool: 'raise',          // 'raise' | 'lower' | 'smooth' | 'pan' | 'features' | 'course'
+  tool: 'raise',          // 'raise' | 'lower' | 'smooth' | 'smudge' | 'pinch' | 'flatten' | 'pan' | 'features' | 'course'
+  lastShapeTool: 'smudge', // which shape tool the "עיצוב" rail button stands for
+  flattenTarget: 0,       // height (m) the flatten tool levels to, set when a stroke starts
   course: emptyCourse(),  // orienteering course (course.js)
   coursePlace: 'control', // what a click places with the course tool: 'start' | 'control' | 'finish'
   navigating: false,      // the navigation game owns the screen (nav-game.js)
@@ -469,7 +476,7 @@ function drawBrush() {
   mapCtx.beginPath();
   mapCtx.arc(x, y, radius, 0, Math.PI * 2);
   const effective = state.drawing ? state.strokeTool || state.tool : state.tool;
-  mapCtx.fillStyle = effective === 'raise' ? 'rgba(238,248,217,.12)' : effective === 'lower' ? 'rgba(238,184,151,.13)' : 'rgba(190,220,232,.14)';
+  mapCtx.fillStyle = { raise: 'rgba(238,248,217,.12)', lower: 'rgba(238,184,151,.13)', smudge: 'rgba(214,190,240,.16)', pinch: 'rgba(250,206,120,.16)', expand: 'rgba(250,206,120,.16)', flatten: 'rgba(255,255,255,.16)' }[effective] || 'rgba(190,220,232,.14)';
   mapCtx.fill();
   mapCtx.lineWidth = 1.6 * mapDpr;
   mapCtx.strokeStyle = 'rgba(255,255,244,.94)';
@@ -1008,7 +1015,7 @@ function updateTerrain() {
 
 // ——— 3D brush preview: a ring draped over the terrain under the map cursor ———
 const BRUSH_RING_SEGMENTS = 72;
-const BRUSH_RING_COLORS = { raise: 0xfffbe8, lower: 0xffc49e, smooth: 0xbfe6f5 };
+const BRUSH_RING_COLORS = { raise: 0xfffbe8, lower: 0xffc49e, smooth: 0xbfe6f5, smudge: 0xd9c2ff, pinch: 0xffd27a, expand: 0xffd27a, flatten: 0xffffff };
 let brushRing = null;
 
 function updateBrushRing() {
@@ -1323,8 +1330,15 @@ function pushUndo() {
   scheduleSave();
 }
 
+// One history for everything on the map: terrain, features (roads/streams) and course.
 function currentSnapshot() {
-  return { heights, mapSize: state.mapSize, localSpacing: state.localSpacing };
+  return {
+    heights,
+    mapSize: state.mapSize,
+    localSpacing: state.localSpacing,
+    features: mapFeatures?.serialize() || [],
+    course: cloneCourse(state.course),
+  };
 }
 
 function restoreSnapshot(snapshot) {
@@ -1333,6 +1347,14 @@ function restoreSnapshot(snapshot) {
   const spacing = snapshot.localSpacing ?? state.localSpacing;
   if (snapshot.mapSize !== state.mapSize || spacing !== state.localSpacing) setMapSize(snapshot.mapSize, snapshot.heights, spacing);
   else heights.set(snapshot.heights);
+  // Features and course are restored after any resize so they land exactly where they were.
+  if (snapshot.features && mapFeatures && JSON.stringify(snapshot.features) !== JSON.stringify(mapFeatures.serialize())) {
+    mapFeatures.load(snapshot.features);
+  }
+  if (snapshot.course) {
+    state.course = sanitizeCourse(snapshot.course);
+    updateCourseUI();
+  }
   scheduleUpdate();
   scheduleSave();
 }
@@ -1389,6 +1411,20 @@ function syncToolUI() {
   const label = $('toolMode');
   label.textContent = TOOL_LABELS[tool];
   label.className = `options-tool ${tool}`;
+  // Shape tools share one rail button and pick their mode in the options bar.
+  const shaping = SHAPE_TOOLS.includes(tool);
+  if (shaping) state.lastShapeTool = tool;
+  const shapeButton = $('shapeBtn');
+  shapeButton.dataset.tool = state.lastShapeTool;
+  shapeButton.dataset.shortcut = `tool-${state.lastShapeTool}`;
+  shapeButton.title = `עיצוב השטח — ${TOOL_LABELS[state.lastShapeTool]} (${shortcutLabel(`tool-${state.lastShapeTool}`)})`;
+  shapeButton.classList.toggle('active', shaping);
+  shapeButton.setAttribute('aria-pressed', String(shaping));
+  label.hidden = shaping;
+  $('shapeModes').hidden = !shaping;
+  $('shapeHint').hidden = !shaping;
+  $('shapeHint').textContent = SHAPE_HINTS[tool] || '';
+  for (const button of document.querySelectorAll('[data-shape]')) button.setAttribute('aria-checked', String(button.dataset.shape === tool));
   refreshPanCursor();
   updateBrushRing();
   drawMap();
@@ -1478,9 +1514,15 @@ function applyRandomTerrain(newSeed = false) {
 // `seconds` is how long the brush acted; strength is metres per second at the centre.
 function applyBrush(gx, gy, seconds, tool = state.tool) {
   const radius = brushRadiusCells(state.brush, mapExtentMeters(), N);
+  if (tool === 'smudge') return; // smudge acts on pointer motion only (see pointermove)
   if (tool === 'smooth') {
     // Smoothing rate scales with strength so the slider means the same thing for every tool.
     applySmoothBrush(heights, N, gx, gy, radius, state.strength * seconds * .35);
+  } else if (tool === 'pinch' || tool === 'expand') {
+    const amount = state.strength * seconds * .012;
+    applyPinchBrush(heights, N, gx, gy, radius, tool === 'pinch' ? amount : -amount);
+  } else if (tool === 'flatten') {
+    applyFlattenBrush(heights, N, gx, gy, radius, state.flattenTarget, state.strength * seconds * .15);
   } else {
     const sign = tool === 'lower' ? -1 : 1;
     applyHeightBrush(heights, N, gx, gy, radius, sign * state.strength * seconds, MIN_HEIGHT, MAX_HEIGHT);
@@ -1493,6 +1535,7 @@ function strokeToolFor(event) {
   if (event?.shiftKey) return 'smooth';
   if (event?.altKey && state.tool === 'raise') return 'lower';
   if (event?.altKey && state.tool === 'lower') return 'raise';
+  if (event?.altKey && state.tool === 'pinch') return 'expand';
   return state.tool;
 }
 
@@ -1538,6 +1581,7 @@ function moveCoursePoint(target, point) {
 
 function handleCoursePointerDown(next, event) {
   const hit = courseHitTest(event);
+  pushUndo();
   if (hit) {
     courseDrag = { ...hit, pointerId: event.pointerId, moved: false };
     mapCanvas.setPointerCapture(event.pointerId);
@@ -1556,6 +1600,8 @@ function handleCoursePointerDown(next, event) {
 
 function removeLastCoursePoint() {
   const course = state.course;
+  if (!course.start) return;
+  pushUndo();
   if (course.finish) course.finish = null;
   else if (course.controls.length) course.controls.pop();
   else course.start = null;
@@ -1581,12 +1627,12 @@ function updateCourseUI() {
 }
 
 function setCourse(course, message = null) {
-  const previous = cloneCourse(state.course);
+  pushUndo();
   state.course = course;
   updateCourseUI();
   drawMap();
   scheduleSave();
-  if (message) showToast(message, { action: { label: 'ביטול', run: () => setCourse(previous) } });
+  if (message) showToast(message, { action: { label: 'ביטול', run: undo } });
 }
 
 function openNavigation() {
@@ -1782,6 +1828,7 @@ mapCanvas.addEventListener('pointerdown', (event) => {
   state.drawing = true;
   state.strokeTool = strokeToolFor(event);
   state.pointer = next;
+  state.flattenTarget = sampleHeight(next.gx / (N - 1), next.gy / (N - 1));
   lastStamp = { ...state.pointer };
   mapCanvas.setPointerCapture(event.pointerId);
   lastBrushTime = performance.now() - 80;
@@ -1853,8 +1900,20 @@ mapCanvas.addEventListener('pointermove', (event) => {
     const now = performance.now();
     const elapsed = clamp((now - lastBrushTime) / 1000, 0, .15);
     lastBrushTime = now;
-    for (let i = 1; i <= steps; i++) {
-      applyBrush(lerp(previous.gx, next.gx, i / steps), lerp(previous.gy, next.gy, i / steps), elapsed / steps, state.strokeTool);
+    if (state.strokeTool === 'smudge') {
+      // Drag the terrain along with the pointer, in small steps so it stays smooth.
+      const radius = brushRadiusCells(state.brush, mapExtentMeters(), N);
+      const strength = clamp(state.strength / 28, .25, 1);
+      const dx = (next.gx - previous.gx) / steps;
+      const dy = (next.gy - previous.gy) / steps;
+      for (let i = 1; i <= steps; i++) {
+        applySmudgeBrush(heights, N, previous.gx + dx * i, previous.gy + dy * i, radius, dx, dy, strength);
+      }
+      scheduleUpdate();
+    } else {
+      for (let i = 1; i <= steps; i++) {
+        applyBrush(lerp(previous.gx, next.gx, i / steps), lerp(previous.gy, next.gy, i / steps), elapsed / steps, state.strokeTool);
+      }
     }
     lastStamp = { ...next };
   } else drawMap();
@@ -2001,6 +2060,7 @@ function toggleNewTerrainMenu() {
   closePopovers();
   if (!open) return;
   popover.hidden = false;
+  updateResetUI();
   $('newTerrainBtn').setAttribute('aria-expanded', 'true');
   popover.querySelector('.preset-button')?.focus();
 }
@@ -2099,6 +2159,9 @@ $('observerTiltRange').addEventListener('input', (event) => {
 for (const button of document.querySelectorAll('.rail-tool[data-tool]')) {
   button.addEventListener('click', () => setTool(button.dataset.tool));
 }
+for (const button of document.querySelectorAll('[data-shape]')) {
+  button.addEventListener('click', () => setTool(button.dataset.shape));
+}
 $('mapZoomInBtn').addEventListener('click', () => stepMapZoom(1));
 $('mapZoomOutBtn').addEventListener('click', () => stepMapZoom(-1));
 $('centerMapBtn').addEventListener('click', () => resetMapView());
@@ -2180,11 +2243,13 @@ $('exaggerationRange').addEventListener('input', (event) => {
 });
 $('undoBtn').addEventListener('click', undo);
 $('redoBtn').addEventListener('click', redo);
-$('resetBtn').addEventListener('click', () => {
-  clearHeights(true);
-  closePopovers();
-  showToast('המשטח חזר לגובה 0 מ׳.', { action: { label: 'ביטול', run: undo } });
-});
+for (const button of document.querySelectorAll('[data-reset]')) {
+  button.addEventListener('click', () => {
+    const kind = button.dataset.reset;
+    resetMap(kind === 'all' ? { terrain: true, features: true, course: true } : { [kind]: true });
+    closePopovers();
+  });
+}
 $('resetCameraBtn').addEventListener('click', () => {
   if (state.observer.firstPerson) exitObserver();
   resetCamera();
@@ -2299,6 +2364,7 @@ mapFeatures = createMapFeatures({
       syncToolUI();
     }
   },
+  beforeChange: () => pushUndo(), // a finished or removed line is one undo step
   changed: () => scheduleSave(),
 });
 rainSimulation = createRainSimulation({
@@ -2375,6 +2441,9 @@ initShortcuts({
   'tool-raise': () => setTool('raise'),
   'tool-lower': () => setTool('lower'),
   'tool-smooth': () => setTool('smooth'),
+  'tool-smudge': () => setTool('smudge'),
+  'tool-pinch': () => setTool('pinch'),
+  'tool-flatten': () => setTool('flatten'),
   'tool-pan': () => setTool('pan'),
   'tool-features': () => setTool('features'),
   'tool-course': () => setTool('course'),
@@ -2475,14 +2544,61 @@ function restoreProject(saved) {
   return true;
 }
 
-function startFresh() {
-  pushUndo();
-  heights.fill(0);
-  mapFeatures?.clearAll();
+// ——— Clearing the map (the "ניקוי המפה" section of the new-terrain menu) ———
+// Terrain, features and course can be cleared separately or together; one undo step.
+function mapContents() {
+  const { min, max } = terrainStats();
+  return {
+    terrain: Math.max(Math.abs(min), Math.abs(max)) > .05,
+    features: mapFeatures?.stats().count || 0,
+    course: coursePoints(state.course).length ? state.course.controls.length + 1 : 0,
+    peak: Math.round(max),
+  };
+}
+
+function updateResetUI() {
+  const contents = mapContents();
+  const info = {
+    terrain: contents.terrain ? `שיא ${contents.peak} מ׳` : 'כבר שטוח',
+    features: contents.features ? `${contents.features} ${contents.features === 1 ? 'קו' : 'קווים'}` : 'אין',
+    course: contents.course ? `${contents.course} נקודות` : 'אין',
+  };
+  for (const button of document.querySelectorAll('[data-reset]')) {
+    const kind = button.dataset.reset;
+    if (kind === 'all') button.disabled = !contents.terrain && !contents.features && !contents.course;
+    else {
+      button.disabled = !contents[kind];
+      button.querySelector('small').textContent = info[kind];
+    }
+  }
+}
+
+function resetMap({ terrain = false, features = false, course = false }) {
+  const all = terrain && features && course;
+  const contents = mapContents();
+  terrain &&= contents.terrain;
+  features &&= contents.features > 0;
+  course &&= contents.course > 0;
+  if (!terrain && !features && !course) return;
+  stopDrawing();
   rainSimulation?.stop();
+  mapFeatures?.cancel(false);
+  pushUndo();
+  if (terrain) heights.fill(0);
+  if (features) mapFeatures?.clearAll();
+  if (course) { state.course = emptyCourse(); updateCourseUI(); }
+  hideCursorReadout();
   scheduleUpdate();
   scheduleSave();
-  showToast('התחלתם משטח חדש. אפשר לבטל ולחזור לפני השטח הקודמים.', { action: { label: 'ביטול', run: undo } });
+  updateResetUI();
+  const parts = [terrain && 'התבליט', features && 'התכסית', course && 'המסלול'].filter(Boolean);
+  const verb = parts.length > 1 ? 'נמחקו' : features ? 'נמחקה' : 'נמחק';
+  const message = all ? 'המפה נוקתה.' : `${parts.join(' ו')} ${verb}.`;
+  showToast(message, { action: { label: 'ביטול', run: undo } });
+}
+
+function startFresh() {
+  resetMap({ terrain: true, features: true, course: true });
 }
 
 syncDetailControls(); // brush limits must match the map before saved settings are applied

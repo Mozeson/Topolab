@@ -172,6 +172,11 @@ body.resizing-panels { user-select: none; cursor: col-resize; }
 .inline-range { display: flex; align-items: center; gap: 7px; color: var(--ink-soft); font-size: 12px; white-space: nowrap; }
 .inline-range input { width: clamp(80px, 9vw, 140px); }
 .inline-range output { min-width: 26px; padding: 1px 6px; border-radius: 5px; color: var(--ink); background: #e2e6da; font-size: 11px; font-weight: 600; text-align: center; font-variant-numeric: tabular-nums; }
+.shape-modes { padding: 2px; display: inline-flex; gap: 2px; background: #e6e9de; border: 1px solid var(--line); border-radius: 9px; }
+.shape-modes button { min-height: 28px; padding: 0 10px; color: var(--ink-soft); background: transparent; border: 0; border-radius: 7px; font-size: 12px; font-weight: 700; }
+.shape-modes button[aria-checked='true'] { color: #5b3f8c; background: #fffef9; box-shadow: 0 1px 4px rgb(26 51 41 / 14%); }
+.shape-hint { flex-basis: 100%; color: var(--ink-soft); font-size: 11px; }
+#shapeBtn[aria-pressed='true'] { background: #6d58a0; border-color: #6d58a0; }
 .options-hint { margin-inline-start: auto; color: var(--ink-soft); font-size: 11px; white-space: nowrap; }
 
 .feature-options { gap: 6px 10px; }
@@ -262,7 +267,14 @@ body.resizing-panels { user-select: none; cursor: col-resize; }
 .popover-close:hover { background: #e9ede2; }
 .popover-section-title { margin: 12px 0 6px; color: var(--ink-soft); font-size: 11px; font-weight: 700; }
 .popover-note { margin: 10px 0 0; color: var(--ink-soft); font-size: 11px; line-height: 1.5; }
-.preset-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.preset-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.reset-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.reset-button { min-height: 62px; padding: 6px 3px; display: grid; place-items: center; gap: 1px; color: var(--ink); background: #fffef9; border: 1px solid var(--line); border-radius: 9px; font-size: 12px; font-weight: 600; }
+.reset-button svg { width: 20px; height: 20px; fill: none; stroke: #9a4a35; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.reset-button small { color: var(--ink-soft); font-size: 10px; font-weight: 400; }
+.reset-button:hover:not(:disabled) { background: #fbeee8; border-color: #e3bfb1; }
+.reset-all { width: 100%; min-height: 38px; margin-top: 6px; color: #fff; background: #a64b2d; border: 0; border-radius: 9px; font-size: 13px; font-weight: 700; }
+.reset-all:hover:not(:disabled) { background: #8c3b20; }
 .preset-button { min-height: 58px; padding: 6px 3px; display: grid; place-items: center; gap: 2px; color: var(--ink-soft); background: #fffef9; border: 1px solid var(--line); border-radius: 9px; font-size: 11px; }
 .preset-button svg { width: 38px; height: 22px; fill: none; stroke: #5b7c69; stroke-width: 1.7; stroke-linejoin: round; stroke-linecap: round; }
 .preset-button:hover { color: var(--ink); background: #eef3e8; border-color: var(--line-strong); }

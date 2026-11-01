@@ -372,6 +372,7 @@ export function createMapFeatures(api) {
       updateStatus('נדרשות לפחות שתי נקודות כדי ליצור קו.');
       return false;
     }
+    api.beforeChange?.();
     const feature = { id: nextId++, type: draft.type, color: draft.color, points: draft.points.map((point) => ({ ...point })) };
     feature.validation = validateFeature(feature);
     features.push(feature);
@@ -403,6 +404,7 @@ export function createMapFeatures(api) {
 
   function removeLast() {
     if (!features.length) return;
+    api.beforeChange?.();
     const removed = features.pop();
     updateLegend();
     updateStatus(`${MAP_FEATURE_TYPES[removed.type].label} האחרון הוסר.`);
