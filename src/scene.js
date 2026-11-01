@@ -1,6 +1,9 @@
 import { createSheepGame } from './sheep.js';
 import { initPanelSplitter } from './splitter.js';
 import { initNavigation } from './nav.js';
+import { createMapFeatures } from './map-features.js';
+import { createRainSimulation } from './rain.js';
+import { createPdfPreviewController } from './pdf-preview.js';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { contours } from 'd3-contour';
@@ -46,6 +49,8 @@ let toastTimer = null;
 let needsRender = true;
 let sheepGame = null;
 let navigation = null;
+let mapFeatures = null;
+let rainSimulation = null;
 let randomState = 0x72f4a91d;
 let lastRandomHillCount = 0;
 let mapPanDrag = null;
@@ -353,6 +358,7 @@ function resetMapView(showMessage = true) {
 
 function setPanMode(enabled) {
   stopDrawing();
+  if (enabled) mapFeatures?.cancel(true);
   state.panMode = enabled;
   const button = $('panMapBtn');
   button.classList.toggle('active', enabled);
@@ -559,18 +565,54 @@ function drawMap() {
     drawContours(mapCtx, mapCanvas.width, mapCanvas.height, mapDpr);
     drawGridLabels(mapCtx, mapCanvas.width, mapCanvas.height, mapDpr);
   }
+  rainSimulation?.draw2D(mapCtx, mapCanvas, mapDpr);
+  mapFeatures?.draw2D(mapCtx, mapCanvas, mapDpr);
   sheepGame?.draw(mapCtx, mapCanvas, mapDpr);
   drawObserver();
   if (!sheepGame?.placing && !state.observer.placing && !state.observerDrag && (!state.observer.firstPerson || state.drawing)) drawBrush();
 }
 
-// Same drawing as the on-screen topographic map, composed on a paper background for print.
-function drawPrintBlock(ctx, w, h, dpr) {
+// Same terrain data as the editor, composed independently for the PDF options.
+function drawPrintBlock(ctx, w, h, dpr, options = {}) {
   ctx.fillStyle = '#fdfcf8';
   ctx.fillRect(0, 0, w, h);
-  drawGridLines(ctx, w, h, dpr);
+  if (options.mapStyle !== 'contours') {
+    const printRaster = document.createElement('canvas');
+    printRaster.width = N;
+    printRaster.height = N;
+    const printRasterCtx = printRaster.getContext('2d');
+    const image = printRasterCtx.createImageData(N, N);
+    for (let y = 0; y < N; y++) {
+      for (let x = 0; x < N; x++) {
+        const index = y * N + x;
+        const shade = options.mapStyle === 'shaded' ? hillshade(x, y) : 1;
+        const [red, green, blue] = heightColor(heights[index], false);
+        const pixel = index * 4;
+        image.data[pixel] = clamp(red * shade, 0, 255);
+        image.data[pixel + 1] = clamp(green * shade, 0, 255);
+        image.data[pixel + 2] = clamp(blue * shade, 0, 255);
+        image.data[pixel + 3] = 255;
+      }
+    }
+    printRasterCtx.putImageData(image, 0, 0);
+    ctx.save();
+    ctx.globalAlpha = clamp(options.tintOpacity ?? .85, 0, 1);
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(printRaster, 0, 0, w, h);
+    ctx.restore();
+  }
+  if (options.showGrid !== false) drawGridLines(ctx, w, h, dpr);
+  else {
+    ctx.save();
+    ctx.strokeStyle = 'rgba(55,76,80,.78)';
+    ctx.lineWidth = 1.1 * dpr;
+    ctx.strokeRect(1 * dpr, 1 * dpr, w - 2 * dpr, h - 2 * dpr);
+    ctx.restore();
+  }
   drawContours(ctx, w, h, dpr);
-  drawGridLabels(ctx, w, h, dpr);
+  if (options.showCoordinates !== false) drawGridLabels(ctx, w, h, dpr);
+  if (options.showFeatures !== false) mapFeatures?.draw2D(ctx, { width: w, height: h }, dpr, false);
 }
 
 // ——— Three.js terrain model ———
@@ -796,6 +838,42 @@ function resizeThree() {
   needsRender = false;
 }
 
+async function capture3DForPdf(view = 'isometric') {
+  if (!scene || !camera) throw new Error('The 3D scene is not ready.');
+  const captureWidth = 1600;
+  const captureHeight = 1000;
+  const captureRenderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true, alpha: false });
+  captureRenderer.setPixelRatio(1);
+  captureRenderer.setSize(captureWidth, captureHeight, false);
+  captureRenderer.outputColorSpace = THREE.SRGBColorSpace;
+  captureRenderer.toneMapping = THREE.ACESFilmicToneMapping;
+  captureRenderer.toneMappingExposure = 0.96;
+  captureRenderer.shadowMap.enabled = true;
+  captureRenderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+  const captureCamera = camera.clone();
+  captureCamera.aspect = captureWidth / captureHeight;
+  captureCamera.near = .1;
+  captureCamera.far = 180;
+  if (view === 'isometric') {
+    captureCamera.position.set(WORLD_SIZE * 1.4, WORLD_SIZE * 1.05, WORLD_SIZE * 1.45);
+    captureCamera.up.set(0, 1, 0);
+    captureCamera.lookAt(0, -.2, 0);
+  } else if (view === 'top') {
+    captureCamera.position.set(0, WORLD_SIZE * 2.1, .001);
+    captureCamera.up.set(0, 0, -1);
+    captureCamera.lookAt(0, 0, 0);
+  }
+  captureCamera.updateProjectionMatrix();
+  captureCamera.updateMatrixWorld(true);
+  scene.updateMatrixWorld(true);
+  captureRenderer.render(scene, captureCamera);
+  const image = captureRenderer.domElement.toDataURL('image/jpeg', .94);
+  captureRenderer.dispose();
+  captureRenderer.forceContextLoss();
+  return image;
+}
+
 function updateSkirt() {
   if (!skirtGeometry) return;
   const array = skirtGeometry.attributes.position.array;
@@ -847,6 +925,8 @@ function updateTerrain() {
   }
   if (state.observer.firstPerson) updateObserverCamera();
   sheepGame?.update3D();
+  mapFeatures?.terrainChanged();
+  rainSimulation?.update3D();
   needsRender = true;
 }
 
@@ -1038,6 +1118,7 @@ function resampleForMapSize(oldHeights, oldN, oldSize, newN, newSize) {
 function setMapSize(newSize, restoredHeights = null) {
   if (!MAP_GRID_SIZES[newSize] || newSize === state.mapSize) return;
   stopDrawing();
+  rainSimulation?.stop();
   const nextN = MAP_GRID_SIZES[newSize];
   const nextHeights = restoredHeights
     ? new Float32Array(restoredHeights)
@@ -1076,6 +1157,7 @@ function setMapSize(newSize, restoredHeights = null) {
     baseMesh.geometry = new THREE.BoxGeometry(WORLD_SIZE + .12, .36, WORLD_SIZE + .12);
   }
   sheepGame?.resize(previousMapSize, newSize);
+  mapFeatures?.resize(previousMapSize, newSize);
   updateSceneForMapSize();
   updateMapScaleText();
   resizeMap();
@@ -1116,6 +1198,7 @@ function pushUndo() {
 
 function setTool(tool) {
   if (state.panMode) setPanMode(false);
+  mapFeatures?.cancel(true);
   state.tool = tool;
   const raising = tool > 0;
   $('raiseBtn').classList.toggle('active', raising);
@@ -1142,6 +1225,7 @@ function setTopo(enabled) {
 }
 
 function clearHeights(record = true) {
+  rainSimulation?.stop();
   if (record) pushUndo();
   heights.fill(0);
   state.pointer = null;
@@ -1150,6 +1234,7 @@ function clearHeights(record = true) {
 }
 
 function applyPreset(name) {
+  rainSimulation?.stop();
   pushUndo();
   for (let y = 0; y < N; y++) {
     for (let x = 0; x < N; x++) {
@@ -1178,6 +1263,7 @@ function terrainRandom() {
 
 function applyRandomTerrain() {
   stopDrawing();
+  rainSimulation?.stop();
   closePopovers();
   pushUndo();
   const hillCount = terrainRandom() < .5 ? 2 : 3;
@@ -1320,6 +1406,11 @@ mapCanvas.addEventListener('pointerdown', (event) => {
   if (event.button !== 0 && event.pointerType === 'mouse') return;
   event.preventDefault();
   const next = eventToGrid(event);
+  if (mapFeatures?.handlePointerDown(next.gx, next.gy)) {
+    state.pointer = next;
+    updatePointReadout(next);
+    return;
+  }
   if (sheepGame?.place(next.gx / (N - 1), next.gy / (N - 1))) return;
   if (state.observer.placing) {
     state.pointer = next;
@@ -1336,6 +1427,7 @@ mapCanvas.addEventListener('pointerdown', (event) => {
     drawMap();
     return;
   }
+  rainSimulation?.stop();
   pushUndo();
   state.drawing = true;
   state.pointer = next;
@@ -1370,6 +1462,7 @@ mapCanvas.addEventListener('pointermove', (event) => {
   const next = eventToGrid(event);
   state.pointer = next;
   updatePointReadout(next);
+  if (mapFeatures?.handlePointerMove(next.gx, next.gy)) return;
   if (state.observerDrag) {
     if (state.observerDrag === 'move') {
       state.observer.u = clamp(next.gx / (N - 1), 0, 1);
@@ -1413,6 +1506,11 @@ mapCanvas.addEventListener('pointerleave', (event) => {
   else if (event.pointerType === 'mouse') stopDrawing(event);
 });
 mapCanvas.addEventListener('contextmenu', (event) => event.preventDefault());
+mapCanvas.addEventListener('dblclick', (event) => {
+  if (!mapFeatures?.active) return;
+  event.preventDefault();
+  mapFeatures.handleDoubleClick();
+});
 
 $('mapWrap').addEventListener('wheel', (event) => {
   event.preventDefault();
@@ -1423,6 +1521,7 @@ $('mapWrap').addEventListener('wheel', (event) => {
 }, { passive: false });
 
 mapCanvas.addEventListener('keydown', (event) => {
+  if (mapFeatures?.handleKey(event)) return;
   if (state.panMode) {
     const panStep = event.shiftKey ? 100 : 40;
     if (event.key === 'ArrowLeft') state.mapView.panX -= panStep;
@@ -1483,6 +1582,7 @@ function updateExercise() {
 function startExercise() {
   if (state.exercise) return;
   state.exerciseBackup = { heights: new Float32Array(heights), mapSize: state.mapSize, topo: state.topo };
+  rainSimulation?.stop();
   state.exercise = true;
   $('checkExerciseBtn').textContent = 'בדיקה';
   heights.fill(0);
@@ -1508,7 +1608,7 @@ function closeExercise() {
 }
 
 function closePopovers() {
-  for (const [popoverId, triggerId] of [['brushPopover', 'brushSettingsBtn'], ['presetsPopover', 'presetsBtn']]) {
+  for (const [popoverId, triggerId] of [['brushPopover', 'brushSettingsBtn'], ['presetsPopover', 'presetsBtn'], ['featuresPopover', 'featuresBtn']]) {
     $(popoverId).hidden = true;
     $(triggerId).setAttribute('aria-expanded', 'false');
   }
@@ -1576,14 +1676,17 @@ $('focusMapBtn').addEventListener('click', () => setFocus('map'));
 $('focusSceneBtn').addEventListener('click', () => setFocus('scene'));
 $('brushSettingsBtn').addEventListener('click', () => togglePopover('brushPopover', 'brushSettingsBtn'));
 $('presetsBtn').addEventListener('click', () => togglePopover('presetsPopover', 'presetsBtn'));
+$('featuresBtn').addEventListener('click', () => togglePopover('featuresPopover', 'featuresBtn'));
 $('closeBrushBtn').addEventListener('click', closePopovers);
 $('closePresetsBtn').addEventListener('click', closePopovers);
+$('closeFeaturesBtn').addEventListener('click', closePopovers);
 document.addEventListener('pointerdown', (event) => {
   if (!event.target.closest('.rail-popover, .rail-button')) closePopovers();
 });
 document.addEventListener('keydown', (event) => {
   if (event.key !== 'Escape') return;
   sheepGame?.cancelPlacement();
+  mapFeatures?.cancel(true);
   closePopovers();
   if (state.focus) { setFocus(state.focus); return; }
   if (state.observer.placing || state.observer.firstPerson) exitObserver();
@@ -1591,6 +1694,7 @@ document.addEventListener('keydown', (event) => {
 
 $('observerBtn').addEventListener('click', () => {
   sheepGame?.cancelPlacement();
+  mapFeatures?.cancel(true);
   if (state.observer.firstPerson || state.observer.placing) {
     exitObserver();
     return;
@@ -1655,14 +1759,8 @@ $('intervalSelect').addEventListener('change', (event) => {
   updateTerrain();
   drawMap();
 });
-let exportBusy = false;
-$('exportPdfBtn').addEventListener('click', async () => {
-  if (exportBusy) return;
-  exportBusy = true;
-  $('exportPdfBtn').disabled = true;
-  try {
-    const { exportTopographicPdf } = await import('./print.js');
-    await exportTopographicPdf({
+const pdfPreview = createPdfPreviewController({
+  getData: () => ({
       sizeKm: state.mapSize,
       interval: state.interval,
       scale: state.scale,
@@ -1671,15 +1769,13 @@ $('exportPdfBtn').addEventListener('click', async () => {
       colorMin: MIN_HEIGHT,
       colorMax: MAX_HEIGHT,
       mapBlock: drawPrintBlock,
-    });
-    showToast('המפה יוצאה ל־PDF בהצלחה.');
-  } catch (error) {
-    console.error('PDF export failed', error);
-    showToast('הייצוא ל־PDF נכשל. נסו שוב.', true);
-  } finally {
-    exportBusy = false;
-    $('exportPdfBtn').disabled = false;
-  }
+      exaggeration: state.exaggeration,
+  }),
+  capture3D: capture3DForPdf,
+  notify: showToast,
+});
+$('exportPdfBtn').addEventListener('click', () => {
+  pdfPreview.open();
 });
 $('exaggerationRange').addEventListener('input', (event) => {
   state.exaggeration = Number(event.target.value);
@@ -1758,6 +1854,8 @@ window.__APP_STATS__ = () => ({
   observer: { ...state.observer },
   observerGroundHeight: sampleHeight(state.observer.u, state.observer.v),
   randomHillCount: lastRandomHillCount,
+  mapFeatures: mapFeatures?.stats() || null,
+  rain: rainSimulation?.stats() || null,
   updateQueued,
   cameraPosition: camera ? camera.position.toArray() : null,
   cameraDirection: camera ? camera.getWorldDirection(new THREE.Vector3()).toArray() : null,
@@ -1777,6 +1875,34 @@ sheepGame = createSheepGame({
   verticalScale: () => metersToWorld() * state.exaggeration,
   redraw: drawMap, invalidate: () => { needsRender = true; }, stop: stopDrawing,
   cancelObserverPlacement: () => { state.observer.placing = false; updateObserverUI(); },
+});
+mapFeatures = createMapFeatures({
+  scene: () => scene,
+  worldSize: () => WORLD_SIZE,
+  gridSize: () => N,
+  height: sampleHeight,
+  verticalScale: () => metersToWorld() * state.exaggeration,
+  redraw: drawMap,
+  invalidate: () => { needsRender = true; },
+  notify: showToast,
+  prepareDrawing: () => {
+    stopDrawing();
+    setPanMode(false);
+    sheepGame?.cancelPlacement();
+    state.observer.placing = false;
+    updateObserverUI();
+    closePopovers();
+  },
+});
+rainSimulation = createRainSimulation({
+  scene: () => scene,
+  worldSize: () => WORLD_SIZE,
+  gridSize: () => N,
+  heights: () => heights,
+  height: sampleHeight,
+  verticalScale: () => metersToWorld() * state.exaggeration,
+  redraw: drawMap,
+  invalidate: () => { needsRender = true; },
 });
 initPanelSplitter(() => { resizeMap(); resizeThree(); });
 if (renderer) {

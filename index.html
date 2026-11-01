@@ -149,6 +149,44 @@
           </button>
         </section>
 
+        <section class="tool-section rail-section features-section">
+          <button class="rail-button" id="featuresBtn" type="button" aria-expanded="false" aria-pressed="false" aria-controls="featuresPopover">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 18c4-6 7-9 10-9 2 0 3 2 5 2 1 0 2-1 3-3"/><path d="M3 13c3-3 6-5 9-5M4 20h16"/></svg>
+            <span>תכסית</span>
+          </button>
+          <div class="rail-popover features-popover" id="featuresPopover" hidden aria-label="ציור דרכים, שבילים ונחלים">
+            <div class="popover-heading"><strong>ציור תכסית</strong><button class="popover-close" id="closeFeaturesBtn" type="button" aria-label="סגירת כלי התכסית">×</button></div>
+            <p class="feature-group-title">דרכים ושבילים</p>
+            <div class="feature-grid">
+              <button class="feature-type-button" type="button" data-feature-type="trail" aria-pressed="false"><i class="feature-swatch swatch-trail"></i><span>שביל</span></button>
+              <button class="feature-type-button" type="button" data-feature-type="markedTrail" aria-pressed="false"><i class="feature-swatch swatch-marked"></i><span>שביל מסומן</span></button>
+              <button class="feature-type-button" type="button" data-feature-type="dirtRoad" aria-pressed="false"><i class="feature-swatch swatch-dirt"></i><span>דרך עפר</span></button>
+              <button class="feature-type-button" type="button" data-feature-type="road" aria-pressed="false"><i class="feature-swatch swatch-road"></i><span>כביש</span></button>
+            </div>
+            <p class="feature-group-title">מים</p>
+            <div class="feature-grid feature-water-grid">
+              <button class="feature-type-button" type="button" data-feature-type="perennialStream" aria-pressed="false"><i class="feature-swatch swatch-perennial"></i><span>נחל איתן</span></button>
+              <button class="feature-type-button" type="button" data-feature-type="intermittentStream" aria-pressed="false"><i class="feature-swatch swatch-intermittent"></i><span>נחל אכזב</span></button>
+            </div>
+            <label class="trail-color-control" for="trailColorSelect">צבע שביל מסומן
+              <select id="trailColorSelect"><option value="red">אדום</option><option value="green">ירוק</option><option value="blue">כחול</option><option value="black">שחור</option></select>
+            </label>
+            <div class="feature-actions">
+              <button id="finishFeatureBtn" type="button" disabled>סיום קו</button>
+              <button id="cancelFeatureBtn" type="button" disabled>ביטול כלי</button>
+              <button id="removeLastFeatureBtn" type="button" disabled>הסרת האחרון</button>
+            </div>
+            <p class="feature-status" id="featureStatus" role="status">בחרו סוג קו ואז לחצו לאורך המסלול במפה.</p>
+          </div>
+        </section>
+
+        <section class="tool-section rail-section rain-section">
+          <button class="rail-button" id="rainBtn" type="button" aria-pressed="false" title="הדמיית זרימת מים לפי התבליט">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 15a4 4 0 1 1 1-7.9A5 5 0 0 1 18 9a3 3 0 0 1 0 6H7Z"/><path d="m8 18-1 2m5-2-1 2m5-2-1 2"/></svg>
+            <span>הפעלת גשם</span>
+          </button>
+        </section>
+
         <section class="tool-section rail-section sliders-section">
           <button class="rail-button" id="brushSettingsBtn" type="button" aria-expanded="false" aria-controls="brushPopover">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 4 6 6-9 9H5v-6l9-9Z"/><path d="m11 7 6 6M5 19c-2 0-3 1-3 2h8"/></svg>
@@ -218,6 +256,8 @@
           <div class="map-scale" aria-hidden="true"><span></span><b id="mapScaleText">1 ק״מ</b></div>
           <div class="map-mode-label" id="mapModeLabel">גובה 0 מ׳</div>
           <div class="map-view-label" id="mapViewLabel" aria-live="polite">קנה מידה 1:25,000 · זום 100%</div>
+          <div class="rain-status-overlay" id="rainStatusOverlay" role="status" aria-live="polite" hidden></div>
+          <div class="feature-legend" id="featureLegend" aria-label="מקרא תכסית" hidden></div>
           <div class="map-zoom-controls" role="group" aria-label="זום והזזת המפה">
             <button id="mapZoomInBtn" type="button" aria-label="התקרבות" title="התקרבות">+</button>
             <button id="mapZoomOutBtn" type="button" aria-label="התרחקות" title="התרחקות">−</button>
@@ -285,8 +325,96 @@
       <li><span>3</span><div><strong>חשפו את המפה הטופוגרפית</strong><p>קווי הגובה מחושבים אוטומטית. קווים צפופים מציינים שיפוע תלול; קווים רחוקים — שיפוע מתון.</p></div></li>
       <li><span>4</span><div><strong>צפו מתוך השטח</strong><p>לחצו על „הצבת אדם” ובחרו נקודה. גררו את האדם לשינוי מיקום ואת קצה החץ לשינוי כיוון ההסתכלות.</p></div></li>
       <li><span>5</span><div><strong>ניווט במקלדת ובמגע</strong><p>לחצו על התצוגה התלת־ממדית: חצים לסיבוב ולתנועה, ‏PageUp/PageDown לקירוב ולהטיה. במכשירי מגע מופיעים שני ג'ויסטיקים על התצוגה.</p></div></li>
+      <li><span>6</span><div><strong>ציירו תכסית והפעילו גשם</strong><p>כלי „תכסית” מוסיף שבילים, דרכים ונחלים. נחלים נבדקים מול השיפוע, וכפתור „הפעלת גשם” מדגים כיצד מים זורמים אל נקודות נמוכות.</p></div></li>
     </ol>
     <button class="button button-primary dialog-done" id="doneHelpBtn" type="button">הבנתי, נתחיל</button>
+  </dialog>
+
+  <dialog class="pdf-preview-dialog" id="pdfPreviewDialog" aria-labelledby="pdfPreviewTitle">
+    <div class="pdf-preview-shell">
+      <header class="pdf-preview-heading">
+        <div>
+          <span class="panel-kicker">לפני ההורדה</span>
+          <h2 id="pdfPreviewTitle">תצוגה מקדימה ל־PDF</h2>
+          <p>בחרו את מראה המפה ואת המידע שיופיע במסמך.</p>
+        </div>
+        <button class="icon-button" id="closePdfPreviewBtn" type="button" aria-label="סגירת התצוגה המקדימה">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>
+        </button>
+      </header>
+
+      <div class="pdf-preview-body">
+        <section class="pdf-preview-stage" aria-label="דפי המסמך">
+          <div class="pdf-page-tabs" id="pdfPageTabs" role="tablist" aria-label="בחירת עמוד">
+            <button type="button" class="active" id="pdfMapPageBtn" role="tab" aria-selected="true">מפה טופוגרפית</button>
+            <button type="button" id="pdf3dPageBtn" role="tab" aria-selected="false" hidden>מודל תלת־ממדי</button>
+          </div>
+          <div class="pdf-paper-wrap" id="pdfPaperWrap" aria-live="polite">
+            <img id="pdfPreviewImage" alt="תצוגה מקדימה של עמוד ה־PDF" />
+            <div class="pdf-preview-loading" id="pdfPreviewLoading">
+              <span class="pdf-spinner" aria-hidden="true"></span>
+              <strong>מכין תצוגה מקדימה…</strong>
+            </div>
+          </div>
+          <p class="pdf-preview-caption" id="pdfPreviewCaption">עמוד 1 מתוך 1 · קנה המידה נשמר בהדפסה בגודל אמיתי 100%</p>
+        </section>
+
+        <aside class="pdf-options" aria-label="אפשרויות ייצוא">
+          <fieldset class="pdf-option-group">
+            <legend>מראה המפה</legend>
+            <label class="pdf-style-option">
+              <input type="radio" name="pdfMapStyle" value="contours" />
+              <span><strong>קווי גובה בלבד</strong><small>רקע בהיר ונקי להדפסה</small></span>
+            </label>
+            <label class="pdf-style-option">
+              <input type="radio" name="pdfMapStyle" value="hypsometric" />
+              <span><strong>צביעה היפסומטרית</strong><small>נמוך בכחול־ירוק, גבוה בחום</small></span>
+            </label>
+            <label class="pdf-style-option">
+              <input type="radio" name="pdfMapStyle" value="shaded" checked />
+              <span><strong>צביעה והצללת תבליט</strong><small>מדגישה גם גובה וגם שיפוע</small></span>
+            </label>
+            <label class="pdf-opacity-control" for="pdfTintOpacity">
+              <span>עוצמת הצבע <output id="pdfTintOpacityValue">85%</output></span>
+              <input type="range" id="pdfTintOpacity" min="25" max="100" step="5" value="85" />
+            </label>
+            <p class="pdf-standard-note">ערכת הצבעים קבועה לפי צביעה היפסומטרית מקובלת, כדי לשמור על קריאה עקבית.</p>
+          </fieldset>
+
+          <fieldset class="pdf-option-group pdf-layer-grid">
+            <legend>שכבות בעמוד המפה</legend>
+            <label><input type="checkbox" id="pdfShowGrid" checked /> רשת משבצות</label>
+            <label><input type="checkbox" id="pdfShowCoordinates" checked /> קואורדינטות</label>
+            <label><input type="checkbox" id="pdfShowLegend" checked /> מקרא גבהים</label>
+            <label><input type="checkbox" id="pdfShowNorth" checked /> חץ צפון</label>
+            <label><input type="checkbox" id="pdfShowScale" checked /> קנה מידה קווי</label>
+            <label><input type="checkbox" id="pdfShowFeatures" checked /> שבילים, כבישים ונחלים</label>
+          </fieldset>
+
+          <fieldset class="pdf-option-group pdf-3d-options">
+            <legend>עמוד תלת־ממדי</legend>
+            <label class="pdf-master-toggle"><input type="checkbox" id="pdfInclude3d" /> הוספת המודל בעמוד נוסף</label>
+            <label for="pdf3dView">זווית צילום</label>
+            <select id="pdf3dView" disabled>
+              <option value="current">הזווית הנוכחית</option>
+              <option value="isometric" selected>מבט אלכסוני</option>
+              <option value="top">מבט מלמעלה</option>
+            </select>
+          </fieldset>
+        </aside>
+      </div>
+
+      <footer class="pdf-preview-footer">
+        <span id="pdfExportStatus" role="status" aria-live="polite">המסמך עדיין לא הורד.</span>
+        <div>
+          <button class="button pdf-cancel-button" id="cancelPdfPreviewBtn" type="button">ביטול</button>
+          <button class="button button-primary" id="downloadPdfBtn" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v11m0 0 4-4m-4 4-4-4M5 21h14"/></svg>
+            הורדת PDF
+          </button>
+        </div>
+      </footer>
+    </div>
   </dialog>
 
   <script type="module" src="./src/scene.js"></script>
