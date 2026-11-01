@@ -214,10 +214,21 @@
         </section>
 
         <section class="tool-section rail-section random-section">
-          <button class="rail-button" id="randomTerrainBtn" type="button" title="יצירת שתי או שלוש כיפות מחוברות">
+          <button class="rail-button" id="randomTerrainBtn" type="button" title="יצירת מפה אקראית" aria-expanded="false" aria-controls="randomPopover">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m2 19 6-10 4 6 3-5 7 9H2Z"/><path d="M17 3v4M15 5h4"/></svg>
             <span>אקראי</span>
           </button>
+
+          <div class="rail-popover random-popover" id="randomPopover" hidden aria-label="יצירת מפה אקראית">
+            <div class="popover-heading"><strong>מפה אקראית</strong><button class="popover-close" id="closeRandomBtn" type="button" aria-label="סגירה">×</button></div>
+<label for="terrain-relief">גובה התבליט (מ׳) <output id="terrain-relief-value">120</output></label><input id="terrain-relief" type="range" min="0" max="200" value="120">
+<label for="terrain-variation">שונות וגודל ההרים <output id="terrain-variation-value">60</output></label><input id="terrain-variation" type="range" min="0" max="100" value="60">
+<label for="terrain-detail">חספוס ופרטים קטנים <output id="terrain-detail-value">35</output></label><input id="terrain-detail" type="range" min="0" max="100" value="35">
+<label for="terrain-valleys">עומק הגאיות <output id="terrain-valleys-value">40</output></label><input id="terrain-valleys" type="range" min="0" max="100" value="40">
+<label for="terrainSeed">מספר מפה (לשחזור)</label><input id="terrainSeed" type="number" min="0" max="4294967295" step="1" required>
+            <p class="popover-note">אותו מספר ואותן הגדרות יוצרים את אותו תבליט. השינויים יחולו בלחיצה על יצירה.</p>
+            <div class="random-actions"><button class="small-action" id="generateTerrainBtn" type="button">יצירה לפי ההגדרות</button><button class="small-action" id="newTerrainBtn" type="button">הגרלת מפה חדשה</button></div>
+          </div>
         </section>
 
         <section class="tool-section rail-section presets-section">

@@ -1,3 +1,4 @@
+import { generateTerrain } from './terrain-generator.js';
 import { createSheepGame } from './sheep.js';
 import { initPanelSplitter } from './splitter.js';
 import { initNavigation } from './nav.js';
@@ -51,8 +52,7 @@ let sheepGame = null;
 let navigation = null;
 let mapFeatures = null;
 let rainSimulation = null;
-let randomState = 0x72f4a91d;
-let lastRandomHillCount = 0;
+let lastRandomTerrain = null;
 let mapPanDrag = null;
 let lastMapBaseSide = 0;
 let wheelZoomDelta = 0;
@@ -1253,84 +1253,25 @@ function applyPreset(name) {
   showToast({ hill: 'גבעה', ridge: 'רכס', valley: 'עמק', crater: 'מכתש' }[name] + ' נוספה למשטח. אפשר להמשיך ולפסל.');
 }
 
-function terrainRandom() {
-  randomState = (randomState + 0x6D2B79F5) >>> 0;
-  let value = randomState;
-  value = Math.imul(value ^ value >>> 15, value | 1);
-  value ^= value + Math.imul(value ^ value >>> 7, value | 61);
-  return ((value ^ value >>> 14) >>> 0) / 4294967296;
-}
-
-function applyRandomTerrain() {
+function applyRandomTerrain(newSeed = false) {
   stopDrawing();
   rainSimulation?.stop();
-  closePopovers();
+  if (newSeed) $('terrainSeed').value = crypto.getRandomValues(new Uint32Array(1))[0];
+  const seedInput = $('terrainSeed');
+  if (!seedInput.checkValidity() || seedInput.value === '') {
+    seedInput.reportValidity();
+    return;
+  }
+  const options = { seed: Number(seedInput.value) >>> 0 };
+  for (const name of ['relief', 'variation', 'detail', 'valleys']) {
+    options[name] = Number($('terrain-' + name).value);
+  }
   pushUndo();
-  const hillCount = terrainRandom() < .5 ? 2 : 3;
-  const angle = terrainRandom() * Math.PI;
-  const axisX = Math.cos(angle);
-  const axisY = Math.sin(angle);
-  const span = hillCount === 2 ? .86 : .98;
-  const centerX = (terrainRandom() - .5) * .08;
-  const centerY = (terrainRandom() - .5) * .08;
-  const hills = [];
-
-  for (let i = 0; i < hillCount; i++) {
-    const along = (i / (hillCount - 1) - .5) * span + (terrainRandom() - .5) * .07;
-    const across = (terrainRandom() - .5) * .18;
-    hills.push({
-      x: centerX + axisX * along - axisY * across,
-      y: centerY + axisY * along + axisX * across,
-      height: 78 + terrainRandom() * 56,
-      radiusX: .17 + terrainRandom() * .055,
-      radiusY: .18 + terrainRandom() * .065,
-      rotation: angle + (terrainRandom() - .5) * .9,
-    });
-  }
-
-  const connectors = hills.slice(1).map((hill, i) => ({
-    from: hills[i],
-    to: hill,
-    height: Math.min(hills[i].height, hill.height) * (.5 + terrainRandom() * .1),
-    width: .065 + terrainRandom() * .025,
-  }));
-
-  for (let y = 0; y < N; y++) {
-    for (let x = 0; x < N; x++) {
-      const nx = (x / (N - 1) - .5) * 2;
-      const ny = (y / (N - 1) - .5) * 2;
-      let height = 0;
-
-      for (const hill of hills) {
-        const dx = nx - hill.x;
-        const dy = ny - hill.y;
-        const cos = Math.cos(hill.rotation);
-        const sin = Math.sin(hill.rotation);
-        const localX = (dx * cos + dy * sin) / hill.radiusX;
-        const localY = (-dx * sin + dy * cos) / hill.radiusY;
-        const dome = hill.height * Math.exp(-(localX * localX + localY * localY) * 1.65);
-        height = Math.max(height, dome);
-      }
-
-      for (const connector of connectors) {
-        const dx = connector.to.x - connector.from.x;
-        const dy = connector.to.y - connector.from.y;
-        const lengthSquared = dx * dx + dy * dy;
-        const t = clamp(((nx - connector.from.x) * dx + (ny - connector.from.y) * dy) / lengthSquared, 0, 1);
-        const distance = Math.hypot(nx - (connector.from.x + dx * t), ny - (connector.from.y + dy * t));
-        const saddle = connector.height * (.86 + .14 * Math.sin(t * Math.PI));
-        const ridge = saddle * Math.exp(-((distance / connector.width) ** 2) * 1.5);
-        height = Math.max(height, ridge);
-      }
-
-      heights[y * N + x] = clamp(height, MIN_HEIGHT, MAX_HEIGHT);
-    }
-  }
-
-  lastRandomHillCount = hillCount;
+  heights.set(generateTerrain(N, options));
+  lastRandomTerrain = options;
   state.pointer = null;
   scheduleUpdate();
-  showToast(`נוצרו ${hillCount} כיפות מחוברות. אפשר להמשיך ולפסל או ליצור תצורה חדשה.`);
+  showToast('נוצרה מפה אקראית. אפשר לשנות את ההגדרות, ליצור שוב או להמשיך לפסל.');
 }
 
 function applyBrush(gx, gy, amount) {
@@ -1608,7 +1549,7 @@ function closeExercise() {
 }
 
 function closePopovers() {
-  for (const [popoverId, triggerId] of [['brushPopover', 'brushSettingsBtn'], ['presetsPopover', 'presetsBtn'], ['featuresPopover', 'featuresBtn']]) {
+  for (const [popoverId, triggerId] of [['randomPopover', 'randomTerrainBtn'], ['brushPopover', 'brushSettingsBtn'], ['presetsPopover', 'presetsBtn'], ['featuresPopover', 'featuresBtn']]) {
     $(popoverId).hidden = true;
     $(triggerId).setAttribute('aria-expanded', 'false');
   }
@@ -1720,7 +1661,16 @@ $('panMapBtn').addEventListener('click', () => setPanMode(!state.panMode));
 $('mapZoomInBtn').addEventListener('click', () => stepMapZoom(1));
 $('mapZoomOutBtn').addEventListener('click', () => stepMapZoom(-1));
 $('centerMapBtn').addEventListener('click', () => resetMapView());
-$('randomTerrainBtn').addEventListener('click', applyRandomTerrain);
+$('randomTerrainBtn').addEventListener('click', () => togglePopover('randomPopover', 'randomTerrainBtn'));
+$('closeRandomBtn').addEventListener('click', closePopovers);
+$('generateTerrainBtn').addEventListener('click', () => applyRandomTerrain(false));
+$('newTerrainBtn').addEventListener('click', () => applyRandomTerrain(true));
+$('terrainSeed').value = crypto.getRandomValues(new Uint32Array(1))[0];
+for (const name of ['relief', 'variation', 'detail', 'valleys']) {
+  $('terrain-' + name).addEventListener('input', (event) => {
+    $('terrain-' + name + '-value').value = event.target.value;
+  });
+}
 $('topoBtn').addEventListener('click', () => setTopo(!state.topo));
 $('brushRange').addEventListener('input', (event) => {
   state.brush = Number(event.target.value);
@@ -1853,7 +1803,7 @@ window.__APP_STATS__ = () => ({
   worldSize: WORLD_SIZE,
   observer: { ...state.observer },
   observerGroundHeight: sampleHeight(state.observer.u, state.observer.v),
-  randomHillCount: lastRandomHillCount,
+  randomTerrain: lastRandomTerrain,
   mapFeatures: mapFeatures?.stats() || null,
   rain: rainSimulation?.stats() || null,
   updateQueued,

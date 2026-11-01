@@ -674,3 +674,9 @@ body.resizing-panels { user-select: none; cursor: col-resize; }
   .map-view-label { max-width: calc(100% - 150px); font-size: 9px; }
   .map-zoom-controls button { min-width: 32px; height: 32px; padding-inline: 7px; }
 }
+
+.random-popover { max-height: min(520px, 70dvh); overflow-y: auto; }
+.random-popover label { display: flex; justify-content: space-between; margin-top: 12px; font-size: 12px; }
+.random-popover input { width: 100%; accent-color: var(--ink); }
+.random-popover input[type="number"] { margin-top: 6px; padding: 6px; box-sizing: border-box; }
+.random-actions { display: grid; gap: 8px; margin-top: 12px; }
