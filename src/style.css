@@ -929,3 +929,52 @@ body.navigating .view-compass { display: none; }
 .nav-relief input { position: absolute; opacity: 0; pointer-events: none; }
 .nav-relief b { font-size: 14px; }
 .nav-relief small { color: var(--ink-soft); font-size: 10px; }
+
+/* ——— Drone mode (the "רחפן" cheat): a drone camera feed over the field view ———
+   No z-index on the overlay: the map card (later in the DOM) stays on top of it. */
+.drone-hud { position: absolute; inset: 0; pointer-events: none; color: #fff; font-family: 'Courier New', ui-monospace, monospace; text-shadow: 0 1px 3px rgb(0 0 0 / 70%); }
+.drone-hud button { pointer-events: auto; }
+body.drone-mode .nav-vignette { background: radial-gradient(ellipse at 50% 50%, transparent 60%, rgb(0 0 0 / 35%) 100%); }
+body.drone-mode .nav-keys { display: none; }
+.drone-corner { position: absolute; width: 46px; height: 46px; border: 0 solid rgb(255 255 255 / 85%); }
+.drone-corner.tl { top: 156px; left: 74px; border-top-width: 2px; border-left-width: 2px; }
+.drone-corner.tr { top: 156px; right: 74px; border-top-width: 2px; border-right-width: 2px; }
+.drone-corner.bl { bottom: 96px; left: 74px; border-bottom-width: 2px; border-left-width: 2px; }
+.drone-corner.br { bottom: 96px; right: 74px; border-bottom-width: 2px; border-right-width: 2px; }
+.drone-cross { position: absolute; top: 50%; left: 50%; width: 80px; height: 80px; transform: translate(-50%, -50%); fill: none; stroke: rgb(255 255 255 / 85%); stroke-width: 1.6; }
+.drone-cross circle { fill: rgb(255 255 255 / 85%); stroke: none; }
+/* Left column under the frame corner: REC, title, then the flight readouts. */
+.drone-rec { position: absolute; top: 172px; left: 92px; display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 700; letter-spacing: .08em; direction: ltr; }
+.drone-rec b { width: 10px; height: 10px; border-radius: 50%; background: #ff3b30; box-shadow: 0 0 8px #ff3b30; animation: drone-rec 1.2s steps(2) infinite; }
+@keyframes drone-rec { 50% { opacity: .2; } }
+.drone-title { position: absolute; top: 194px; left: 92px; font: 700 12px Heebo, Arial, sans-serif; direction: rtl; }
+.drone-readouts { position: absolute; top: 222px; left: 92px; padding: 8px 10px; display: grid; grid-template-columns: repeat(2, auto); gap: 6px 18px; direction: rtl; background: rgb(0 0 0 / 22%); border-radius: 10px; }
+.drone-readouts small { display: block; font: 600 10px Heebo, Arial, sans-serif; opacity: .85; }
+.drone-readouts strong { display: flex; align-items: center; gap: 6px; font-size: 16px; font-variant-numeric: tabular-nums; direction: ltr; justify-content: flex-end; }
+.drone-battery-bar { width: 34px; height: 12px; padding: 1px; display: inline-block; border: 1.5px solid #fff; border-radius: 3px; }
+.drone-battery-bar i { display: block; height: 100%; width: 100%; background: #6be07c; border-radius: 1px; }
+.drone-battery.low strong { color: #ffb4a8; }
+.drone-battery.low .drone-battery-bar i { background: #ff5b45; }
+.drone-alt-scale { position: absolute; top: 50%; right: 34px; width: 8px; height: 220px; transform: translateY(-50%); border: 1.5px solid rgb(255 255 255 / 80%); border-radius: 4px; }
+.drone-alt-scale i { position: absolute; left: -7px; width: 22px; height: 3px; background: #ffd36e; box-shadow: 0 0 6px #ffd36e; transform: translateY(-50%); }
+.drone-alt-scale span { position: absolute; right: 14px; font-size: 10px; }
+.drone-alt-scale span:first-of-type { top: -6px; }
+.drone-alt-scale span:last-of-type { bottom: -6px; }
+.drone-controls { position: absolute; right: 96px; bottom: 112px; display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.drone-controls button { width: 52px; height: 44px; color: #fff; background: rgb(14 30 25 / 55%); border: 1.5px solid rgb(255 255 255 / 55%); border-radius: 12px; font-size: 18px; backdrop-filter: blur(6px); }
+.drone-controls button:active { background: rgb(255 211 110 / 55%); }
+.drone-controls .drone-land { width: auto; padding: 0 12px; font: 700 13px Heebo, Arial, sans-serif; background: rgb(226 102 47 / 85%); border-color: #fff; }
+.drone-keys { position: absolute; left: 50%; bottom: 22px; transform: translateX(-50%); padding: 6px 14px; border-radius: 16px; background: rgb(0 0 0 / 35%); font: 12px Heebo, Arial, sans-serif; white-space: nowrap; }
+.drone-keys kbd { margin-inline: 1px; color: var(--ink); text-shadow: none; }
+@media (pointer: coarse) { .drone-keys { display: none; } }
+@media (max-width: 640px), (pointer: coarse) and (max-height: 500px) {
+  .drone-corner, .drone-title { display: none; }
+  .drone-rec { top: auto; bottom: 214px; left: 16px; font-size: 11px; }
+  .drone-readouts { top: 132px; right: 12px; left: auto; padding: 6px 8px; grid-template-columns: auto; gap: 2px; }
+  .drone-readouts strong { font-size: 13px; }
+  .drone-alt-scale { right: 8px; top: auto; bottom: 214px; height: 120px; transform: none; }
+  .drone-controls { right: 28px; bottom: 214px; }
+  .drone-controls button { width: 44px; height: 38px; }
+}
+.nav-timer { pointer-events: auto; cursor: default; user-select: none; -webkit-user-select: none; }
+.nav-drone-badge { color: #fff; background: #7b4fd6; }

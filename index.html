@@ -111,6 +111,25 @@
           </div>
           <div class="nav-hud" id="navHud" hidden>
             <div class="nav-vignette" aria-hidden="true"></div>
+            <div class="drone-hud" id="droneHud" hidden>
+              <i class="drone-corner tl"></i><i class="drone-corner tr"></i><i class="drone-corner bl"></i><i class="drone-corner br"></i>
+              <svg class="drone-cross" viewBox="0 0 80 80" aria-hidden="true"><path d="M40 22v12M40 46v12M22 40h12M46 40h12"/><circle cx="40" cy="40" r="2.2"/></svg>
+              <div class="drone-rec"><b></b>REC <span id="droneClock">00:00</span></div>
+              <div class="drone-title">🚁 רחפן · <span id="droneGimbal">-30°</span></div>
+              <div class="drone-readouts" aria-live="off">
+                <div><small>גובה מעל הקרקע</small><strong id="droneAgl">60 מ׳</strong></div>
+                <div><small>גובה הקרקע (מפה)</small><strong id="droneGround">0 מ׳</strong></div>
+                <div><small>מהירות</small><strong id="droneSpeed">0 קמ״ש</strong></div>
+                <div class="drone-battery"><small>סוללה</small><strong><span class="drone-battery-bar"><i id="droneBatteryBar"></i></span><span id="droneBattery">100%</span></strong></div>
+              </div>
+              <div class="drone-alt-scale" aria-hidden="true"><i id="droneAltMarker"></i><span>500</span><span>0</span></div>
+              <div class="drone-controls">
+                <button type="button" id="droneUpBtn" aria-label="עלייה (E)" title="עלייה (E / גלגלת)">▲</button>
+                <button type="button" id="droneDownBtn" aria-label="ירידה (Q)" title="ירידה (Q / גלגלת)">▼</button>
+                <button type="button" id="droneLandBtn" class="drone-land" title="נחיתה — ממשיכים ברגל מנקודת הנחיתה">🛬 נחיתה</button>
+              </div>
+              <div class="drone-keys"><kbd>W</kbd><kbd>S</kbd> טיסה · <kbd>A</kbd><kbd>D</kbd> סיבוב · <kbd>E</kbd><kbd>Q</kbd> גובה · גרירה: זווית מצלמה · <kbd>Shift</kbd> טורבו</div>
+            </div>
             <div class="nav-compass" id="navCompass" aria-hidden="true">
               <div class="nav-compass-window">
                 <div class="nav-compass-tape" id="navCompassTape"></div>

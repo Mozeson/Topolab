@@ -1027,7 +1027,7 @@ function resizeThree() {
   if (!width || !height) return;
   renderer.setSize(width, height, false);
   camera.aspect = width / height;
-  camera.fov = state.observer.firstPerson ? OBSERVER_FOV : camera.aspect < 0.85 ? 52 : 43;
+  camera.fov = state.observer.firstPerson ? (state.observer.drone ? 74 : OBSERVER_FOV) : camera.aspect < 0.85 ? 52 : 43;
   camera.near = state.observer.firstPerson ? metersToWorld() * .3 : .1;
   camera.updateProjectionMatrix();
   if (scene) renderer.render(scene, camera);
@@ -1225,9 +1225,11 @@ function updateObserverCamera() {
   const groundHeight = Math.max(sampleHeight(observer.u, observer.v), surfaceHeight(observer.u, observer.v));
   const eye = state.navigating ? NAV_EYE_HEIGHT_METERS : EYE_HEIGHT_METERS;
   const verticalScale = metersToWorld() * state.exaggeration;
+  // Drone mode (nav-game.js): the camera flies at the drone's altitude instead of eye height.
+  const flying = observer.drone && Number.isFinite(observer.flyY);
   camera.position.set(
     (observer.u - .5) * WORLD_SIZE,
-    groundHeight * verticalScale + (eye + (observer.bob || 0)) * metersToWorld(),
+    flying ? observer.flyY : groundHeight * verticalScale + (eye + (observer.bob || 0)) * metersToWorld(),
     (observer.v - .5) * WORLD_SIZE,
   );
   const heading = observer.heading * Math.PI / 180;
@@ -2787,6 +2789,7 @@ window.__play = () => {};
 window.__NAV_TELEPORT__ = () => navGame?.debugTeleport();
 window.__NAV_LOOK_AT_NEXT__ = (meters) => navGame?.debugApproach(meters);
 window.__NAV_PLACE__ = (u, v, heading) => navGame?.debugPlace(u, v, heading);
+window.__NAV_DRONE__ = () => navGame?.debugDrone();
 window.__APP_STATS__ = () => ({
   gridVertices: N * N,
   gridResolution: N,
@@ -2917,6 +2920,16 @@ navGame = createNavGame({
   groundInfo: (u, v) => mapFeatures?.groundInfo(u, v),
   updateCamera: updateObserverCamera,
   gridOrigin: () => state.gridOrigin,
+  // Drone mode: wider lens and a longer view (the fog moves out while flying).
+  setDrone: (on) => {
+    state.observer.drone = on;
+    if (scene?.fog && state.navigating) {
+      scene.fog.near = WORLD_SIZE * (on ? .7 : .3);
+      scene.fog.far = WORLD_SIZE * (on ? 2.8 : 1.45);
+    }
+    resizeThree();
+    updateObserverCamera();
+  },
   invalidate: () => { needsRender = true; },
   renderMapBase: (ctx, w, h, dpr) => drawPrintBlock(ctx, w, h, dpr, { mapStyle: 'hypsometric', tintOpacity: .4, showGrid: false, showCoordinates: false, showFeatures: true }),
   enter: enterGameMode,
