@@ -15,6 +15,7 @@ index.html ── src/style.css
            ├── persistence.js      שמירה אוטומטית (קידוד טהור + localStorage)
            ├── shortcuts.js        טבלת קיצורים + handler גלובלי
            ├── terrain-generator.js  מפה אקראית לפי seed (טהור, עם בדיקות)
+           ├── erosion.js          סחיפה ופריצת שקעים: מפות אקראיות שמתנקזות כמו נוף אמיתי (טהור, עם בדיקות)
            ├── hydrology.js        מודל המים: priority-flood, D8/MFD, אגמים לפי כמות גשם (טהור, עם בדיקות)
            ├── course.js           מסלול ניווט: מודל, מחולל, ניקוד, ציור (טהור, עם בדיקות)
            ├── nav-game.js         משחק הניווט: תדריך, HUD, דגלים/שמיים/שיחים, תוצאות (docs/NAVIGATION.md)

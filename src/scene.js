@@ -1,5 +1,6 @@
 import { gridResolution, brushRadiusCells, resampleForMapSize } from './terrain-grid.js';
 import { generateTerrain } from './terrain-generator.js';
+import { drainLandscape, erodeStreamPower, breachDepressions } from './erosion.js';
 import { createSheepGame } from './sheep.js';
 import { initPanelSplitter } from './splitter.js';
 import { initNavigation } from './nav.js';
@@ -1505,6 +1506,9 @@ function applyRandomTerrain(newSeed = false) {
   }
   pushUndo();
   heights.set(generateTerrain(N, options));
+  // Let water shape the noise: open channels, branching valleys, only deep lakes remain.
+  options.drainage = Number($('terrain-drainage').value);
+  drainLandscape(heights, N, options.drainage, { min: MIN_HEIGHT, max: MAX_HEIGHT });
   lastRandomTerrain = options;
   state.pointer = null;
   scheduleUpdate();
@@ -2168,7 +2172,7 @@ $('centerMapBtn').addEventListener('click', () => resetMapView());
 $('randomTerrainBtn').addEventListener('click', () => { applyRandomTerrain(true); closePopovers(); });
 $('generateTerrainBtn').addEventListener('click', () => { applyRandomTerrain(false); closePopovers(); });
 $('terrainSeed').value = crypto.getRandomValues(new Uint32Array(1))[0];
-for (const name of ['relief', 'variation', 'detail', 'valleys']) {
+for (const name of ['relief', 'variation', 'detail', 'valleys', 'drainage']) {
   $('terrain-' + name).addEventListener('input', (event) => {
     $('terrain-' + name + '-value').value = event.target.value;
   });
@@ -2243,6 +2247,21 @@ $('exaggerationRange').addEventListener('input', (event) => {
 });
 $('undoBtn').addEventListener('click', undo);
 $('redoBtn').addEventListener('click', redo);
+let erosionPresses = 0;
+// One "סחיפה" press: a few passes of stream-power erosion on the current terrain, then
+// small pits are cut open. Real erosion only lowers ground, so heights are not rescaled.
+$('erodeBtn').addEventListener('click', () => {
+  stopDrawing();
+  rainSimulation?.stop();
+  pushUndo();
+  erosionPresses = (erosionPresses + 1) % 1e6;
+  erodeStreamPower(heights, N, { passes: 12, strength: 2.6, m: .6, diffusion: .04, roughness: 2.5, seed: erosionPresses });
+  breachDepressions(heights, N, { keepDepth: 6, keepCells: Math.round(N * .3) });
+  for (let i = 0; i < heights.length; i++) heights[i] = clamp(heights[i], MIN_HEIGHT, MAX_HEIGHT);
+  scheduleUpdate();
+  closePopovers();
+  showToast('המים חרצו ערוצים בשטח. אפשר ללחוץ שוב להעמקה, או להפעיל גשם ולראות את הזרימה.', { action: { label: 'ביטול', run: undo } });
+});
 for (const button of document.querySelectorAll('[data-reset]')) {
   button.addEventListener('click', () => {
     const kind = button.dataset.reset;
