@@ -2369,6 +2369,8 @@ mapFeatures = createMapFeatures({
 });
 rainSimulation = createRainSimulation({
   scene: () => scene,
+  surfaceHeight,
+  extent: mapExtentMeters,
   worldSize: () => WORLD_SIZE,
   gridSize: () => N,
   heights: () => heights,

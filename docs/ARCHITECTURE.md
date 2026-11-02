@@ -15,10 +15,10 @@ index.html ── src/style.css
            ├── persistence.js      שמירה אוטומטית (קידוד טהור + localStorage)
            ├── shortcuts.js        טבלת קיצורים + handler גלובלי
            ├── terrain-generator.js  מפה אקראית לפי seed (טהור, עם בדיקות)
-           ├── hydrology.js        מודל זרימה (טהור, עם בדיקות)
+           ├── hydrology.js        מודל המים: priority-flood, D8/MFD, אגמים לפי כמות גשם (טהור, עם בדיקות)
            ├── course.js           מסלול ניווט: מודל, מחולל, ניקוד, ציור (טהור, עם בדיקות)
            ├── nav-game.js         משחק הניווט: תדריך, HUD, דגלים/שמיים/שיחים, תוצאות (docs/NAVIGATION.md)
-           ├── rain.js             הדמיית גשם (2D + 3D), משתמש ב-hydrology
+           ├── rain.js             סימולטור הגשם: נחלים, אגמים, יציאות, אנימציה (2D + 3D). docs/RAIN.md
            ├── map-features.js     שבילים/דרכים/נחלים: ציור, אימות שיפוע, 3D, serialize/load
            ├── sheep.js            ביצת פסחא: "חפשו את הכבשה"
            ├── nav.js              ניווט מקלדת וג'ויסטיקים בתלת־ממד

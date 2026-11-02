@@ -223,7 +223,12 @@ body.resizing-panels { user-select: none; cursor: col-resize; }
 .map-zoom-controls button:hover:not(:disabled) { background: #e2eadc; }
 .map-zoom-controls button:disabled { cursor: default; }
 .cursor-readout { position: absolute; z-index: 6; left: 0; top: 0; padding: 3px 8px; color: #fbfdf7; background: rgb(23 55 47 / 86%); border-radius: 7px; box-shadow: 0 2px 8px rgb(15 39 31 / 25%); font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; pointer-events: none; direction: rtl; }
-.rain-status-overlay { position: absolute; z-index: 5; top: 46px; left: 50%; transform: translateX(-50%); max-width: min(75%, 440px); padding: 6px 11px; color: #174b65; background: rgb(232 248 253 / 92%); border: 1px solid rgb(43 133 172 / 28%); border-radius: 18px; box-shadow: 0 3px 12px rgb(29 83 104 / 14%); font-size: 11px; font-weight: 600; text-align: center; pointer-events: none; }
+.rain-panel { position: absolute; z-index: 6; top: 44px; left: 50%; transform: translateX(-50%); width: min(92%, 460px); padding: 8px 12px; display: grid; gap: 4px; color: #174b65; background: rgb(240 250 254 / 94%); border: 1px solid rgb(43 133 172 / 30%); border-radius: 14px; box-shadow: 0 6px 18px rgb(29 83 104 / 18%); backdrop-filter: blur(6px); }
+.rain-amount { display: grid; grid-template-columns: auto auto 1fr auto; align-items: center; gap: 8px; font-size: 12px; font-weight: 700; }
+.rain-amount svg { width: 20px; height: 20px; fill: none; stroke: #1f78a8; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.rain-amount input { width: 100%; accent-color: #1f78a8; }
+.rain-amount output { min-width: 112px; font-size: 11px; text-align: left; font-variant-numeric: tabular-nums; }
+.rain-status { font-size: 11px; font-weight: 600; line-height: 1.45; text-align: center; }
 .feature-legend { position: absolute; z-index: 4; left: 50%; bottom: 14px; transform: translateX(-50%); max-width: min(55%, 520px); padding: 5px 8px; display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 5px 10px; color: #31423d; background: rgb(252 251 244 / 90%); border: 1px solid rgb(68 92 83 / 18%); border-radius: 10px; box-shadow: 0 3px 12px rgb(27 51 42 / 12%); font-size: 9px; pointer-events: none; }
 .feature-legend-item { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
 .feature-legend-item i { width: 25px; height: 7px; display: block; }

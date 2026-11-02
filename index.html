@@ -314,7 +314,15 @@
               <div class="map-mode-label" id="mapModeLabel" hidden></div>
               <div class="map-view-label" id="mapViewLabel" aria-live="polite">קנה מידה 1:25,000 · זום 100%</div>
               <div class="cursor-readout" id="cursorReadout" aria-hidden="true" hidden></div>
-              <div class="rain-status-overlay" id="rainStatusOverlay" role="status" aria-live="polite" hidden></div>
+              <div class="rain-panel" id="rainPanel" hidden>
+                <label class="rain-amount" for="rainAmount">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 15a4 4 0 1 1 1-7.9A5 5 0 0 1 18 9a3 3 0 0 1 0 6H7Z"/><path d="m8 18-1 2m5-2-1 2m5-2-1 2"/></svg>
+                  <span>כמות גשם</span>
+                  <input id="rainAmount" type="range" min="0" max="100" step="1" value="62">
+                  <output id="rainAmountValue" for="rainAmount"></output>
+                </label>
+                <div class="rain-status" id="rainStatusOverlay" role="status" aria-live="polite"></div>
+              </div>
               <div class="feature-legend" id="featureLegend" aria-label="מקרא תכסית" hidden></div>
               <div class="map-zoom-controls" role="group" aria-label="זום והזזת המפה">
                 <button id="mapZoomInBtn" type="button" aria-label="התקרבות" title="התקרבות (+)">+</button>
