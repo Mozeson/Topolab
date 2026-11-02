@@ -920,3 +920,12 @@ body.navigating .scene-panel .scene-viewport { flex: 1 1 auto; min-height: 0; as
 .view-compass .vc-e { top: 35px; right: 0; }
 .view-compass .vc-w { top: 35px; left: 0; }
 body.navigating .view-compass { display: none; }
+
+.nav-relief { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 13px; }
+.nav-relief > span { margin-inline-end: 4px; color: var(--ink-soft); font-weight: 600; }
+.nav-relief label { position: relative; min-width: 54px; padding: 5px 10px; display: grid; justify-items: center; border: 2px solid var(--line); border-radius: 10px; background: #fffef9; cursor: pointer; }
+.nav-relief label:has(input:checked) { border-color: var(--go); background: #fff3ea; }
+.nav-relief label:has(input:focus-visible) { outline: 3px solid var(--focus); outline-offset: 2px; }
+.nav-relief input { position: absolute; opacity: 0; pointer-events: none; }
+.nav-relief b { font-size: 14px; }
+.nav-relief small { color: var(--ink-soft); font-size: 10px; }

@@ -2007,7 +2007,7 @@ function openNavigation() {
 // Game mode: the 3D panel fills the window, terrain shows natural colours with ground
 // texture, contours are hidden and the vertical scale is true (×1).
 let gameSaved = null;
-function enterGameMode() {
+function enterGameMode({ exaggeration = 1 } = {}) {
   stopDrawing();
   closePopovers();
   rainSimulation?.stop();
@@ -2023,7 +2023,9 @@ function enterGameMode() {
     observer: { ...state.observer },
   };
   state.navigating = true;
-  state.exaggeration = 1;
+  // The field view can be exaggerated so hills read as clearly as on the map; walking
+  // speed and climb are always computed from the real slope (nav-game.js).
+  state.exaggeration = clamp(exaggeration, 1, 10);
   $('toast').hidden = true;
   document.querySelector('#zoomJoystick .joystick-tag').textContent = 'מבט'; // in the game this stick tilts the view
   document.body.classList.add('navigating');

@@ -22,6 +22,8 @@ const RUN_FACTOR = 1.8;
 const BACK_FACTOR = .55;
 const BEST_KEY = 'topolab-nav-best';
 const SOUND_KEY = 'topolab-nav-sound';
+const RELIEF_KEY = 'topolab-nav-relief';
+const RELIEF_OPTIONS = [1, 3, 5, 10];
 const CARDINALS = { 0: 'צ', 90: 'מז', 180: 'ד', 270: 'מע' };
 const COMPASS_PX = 3; // pixels per degree on the compass tape
 
@@ -109,6 +111,15 @@ export function createNavGame(api) {
   }
 
   levelInputs.forEach((input) => input.addEventListener('change', () => applyLevel(input.value)));
+
+  // Vertical exaggeration in the field (display only: speed and climb use the real slope).
+  const reliefInputs = [...document.querySelectorAll('input[name="navRelief"]')];
+  let relief = readStorage(RELIEF_KEY, 10);
+  if (!RELIEF_OPTIONS.includes(relief)) relief = 10;
+  reliefInputs.forEach((input) => {
+    input.checked = Number(input.value) === relief;
+    input.addEventListener('change', () => { relief = Number(input.value); writeStorage(RELIEF_KEY, relief); });
+  });
   for (const id of ['navMapMode', 'navShowPosition', 'navShowBearing', 'navShowDistance']) $(id).addEventListener('change', readCustomControls);
 
   function bestKey() {
@@ -342,6 +353,10 @@ export function createNavGame(api) {
     return { group, materials, note, textures: [noteTexture], geometries: [rockGeometry, note.geometry] };
   }
 
+  // Ground height (m) on the rendered terrain triangles: with vertical exaggeration a
+  // bilinear sample can float or bury objects by metres.
+  const groundAt = (u, v) => (api.surfaceHeight ? api.surfaceHeight(u, v) : api.height(u, v));
+
   function buildWorld() {
     const scene = api.scene();
     if (!scene) return null;
@@ -383,7 +398,7 @@ export function createNavGame(api) {
       pole.position.y = flagM * 1.15;
       flag.add(kite, pole);
       flag.scale.setScalar(mtw);
-      flag.position.set((point.u - .5) * W, api.height(point.u, point.v) * vs, (point.v - .5) * W);
+      flag.position.set((point.u - .5) * W, groundAt(point.u, point.v) * vs, (point.v - .5) * W);
       flag.userData = { index, materials: [kiteMaterial, poleMaterial], kite };
       group.add(flag);
       flags.push(flag);
@@ -436,7 +451,7 @@ export function createNavGame(api) {
         const size = sizeFn();
         quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), rand() * Math.PI * 2);
         matrix.compose(
-          new THREE.Vector3((u - .5) * W, api.height(u, v) * vs + size.y * lift * mtw, (v - .5) * W),
+          new THREE.Vector3((u - .5) * W, groundAt(u, v) * vs + size.y * lift * mtw, (v - .5) * W),
           quaternion,
           new THREE.Vector3(size.x * mtw, size.y * mtw, size.x * mtw),
         );
@@ -570,7 +585,7 @@ export function createNavGame(api) {
 
   function start() {
     if (!course || points.length < 3) return;
-    api.enter();
+    api.enter({ exaggeration: relief });
     disposeWorld();
     world = buildWorld();
     buildCompass();
