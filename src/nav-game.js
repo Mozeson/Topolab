@@ -9,6 +9,11 @@ import {
 } from './course.js';
 import { readCoordinate, formatCoordinate } from './grid-coords.js';
 import { DRONE, FPV, stepAltitude, stepLanding, stepBattery, canReadNote, feedCheat, fpvTopSpeed, fpvVelocity, fpvGround, terrainAhead } from './drone.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { CAMEL, valleyScore, sampleGrid, spawnCamels, stepCamel, separateCamels, metersBetween, detectRadius } from './camels.js';
+import {
+  skyState, skyBasis, starVector, BRIGHT_STARS, moonPhase, moonTimes, moonDirection, hebrewDay, formatHour, altitude, azimuth, directionName,
+} from './sky.js';
 
 export const NAV_LEVELS = {
   easy: { mapMode: 'always', showPosition: true, showBearing: true, showDistance: true },
@@ -27,6 +32,16 @@ const RELIEF_KEY = 'topolab-nav-relief';
 const RELIEF_OPTIONS = [1, 3, 5, 10];
 const CARDINALS = { 0: 'צ', 90: 'מז', 180: 'ד', 270: 'מע' };
 const COMPASS_PX = 3; // pixels per degree on the compass tape
+const CAMELS_KEY = 'topolab-nav-camels';
+const TIME_KEY = 'topolab-nav-time';
+const MOON_KEY = 'topolab-nav-moon-day';
+const HOUR_KEY = 'topolab-nav-start-hour';
+const TIME_OPTIONS = ['day', 'dusk', 'night'];
+const NIGHT_HOURS = [19, 20, 21, 22, 23, 24, 25, 26, 27, 28]; // 19:00 … 04:00 on the evening clock (sky.js)
+const DUSK_START = 17 + 40 / 60; // twenty minutes before sunset
+export const CAMEL_PENALTY = 20; // seconds added when a camel catches you
+const LAMP_INTENSITY = 3.6;  // headlamp beam (decay 0: even light out to its range)
+const SPILL_INTENSITY = .6;  // its soft spill around your feet
 
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
@@ -80,6 +95,11 @@ export function createNavGame(api) {
   let hudTimer = 0;
   let mapTimer = 0;
   let countdownTimer = null;
+  let camelRng = Math.random;
+  const lampDir = new THREE.Vector3();
+  const headingTurn = new THREE.Quaternion();
+  const viewDir = new THREE.Vector3();
+  const toObject = new THREE.Vector3();
 
   // ——— Setup dialog ———
   const setupDialog = $('navSetupDialog');
@@ -127,8 +147,86 @@ export function createNavGame(api) {
   });
   for (const id of ['navMapMode', 'navShowPosition', 'navShowBearing', 'navShowDistance']) $(id).addEventListener('change', readCustomControls);
 
+  // Camels in the field (camels.js) and the time of day with the moon (sky.js).
+  let camelsOption = readStorage(CAMELS_KEY, 'few');
+  if (!(camelsOption in CAMEL.counts)) camelsOption = 'few';
+  document.querySelectorAll('input[name="navCamels"]').forEach((input) => {
+    input.checked = input.value === camelsOption;
+    input.addEventListener('change', () => { camelsOption = input.value; writeStorage(CAMELS_KEY, camelsOption); });
+  });
+  let timeOption = readStorage(TIME_KEY, 'day');
+  if (!TIME_OPTIONS.includes(timeOption)) timeOption = 'day';
+  let moonDay = clamp(Math.round(Number(readStorage(MOON_KEY, 15)) || 15), 1, 30);
+  let startHour = Number(readStorage(HOUR_KEY, 21));
+  if (!NIGHT_HOURS.includes(startHour)) startHour = 21;
+  $('navStartHour').innerHTML = NIGHT_HOURS.map((h) => `<option value="${h}">${formatHour(h)}</option>`).join('');
+  $('navStartHour').value = String(startHour);
+  $('navMoonDay').value = String(moonDay);
+  document.querySelectorAll('input[name="navTime"]').forEach((input) => {
+    input.checked = input.value === timeOption;
+    input.addEventListener('change', () => { timeOption = input.value; writeStorage(TIME_KEY, timeOption); updateMoonPreview(); updateBest(); });
+  });
+  $('navMoonDay').addEventListener('input', () => { moonDay = Number($('navMoonDay').value); writeStorage(MOON_KEY, moonDay); updateMoonPreview(); });
+  $('navStartHour').addEventListener('change', () => { startHour = Number($('navStartHour').value); writeStorage(HOUR_KEY, startHour); updateMoonPreview(); });
+  const startClockFor = () => (timeOption === 'dusk' ? DUSK_START : timeOption === 'night' ? startHour : 12);
+
+  // The moon in the briefing: its phase, and where it will be when you set out.
+  function updateMoonPreview() {
+    $('navMoonRow').hidden = timeOption === 'day';
+    $('navStartHourRow').hidden = timeOption !== 'night';
+    if (timeOption === 'day') return;
+    const start = startClockFor();
+    const at = timeOption === 'dusk' ? 19.5 : start; // at dusk: once it is dark
+    const phase = moonPhase(moonDay, at);
+    $('navMoonDayLabel').textContent = hebrewDay(moonDay);
+    drawMoon($('navMoonCanvas'), phase.elongation);
+    const times = moonTimes(moonDay);
+    const dir = moonDirection(at, moonDay);
+    const height = altitude(dir);
+    const when = timeOption === 'dusk' ? 'כשיחשיך' : 'ביציאה';
+    let status;
+    if (phase.illumination < .04) status = 'אין ירח הלילה: חושך מוחלט, רק כוכבים.';
+    else if (height > 2) status = `${when} הירח ב${directionName(azimuth(dir))}, ${Math.round(height)}° מעל האופק${times.set !== null && times.set > at ? `, ושוקע ב־${formatHour(times.set)}` : ''}.`;
+    else if (times.rise !== null && times.rise > at) status = `${when} הירח עוד מתחת לאופק. הוא יזרח ב־${formatHour(times.rise)}.`;
+    else status = `${when} הירח כבר שקע${times.set !== null ? ` (ב־${formatHour(times.set)})` : ''}.`;
+    const lead = timeOption === 'dusk' ? `יציאה ב־${formatHour(start)}, שקיעה ב־18:00 וחושך מלא בסביבות 19:25. ` : '';
+    $('navMoonInfo').textContent = `${lead}${phase.emoji} ${phase.name} (${Math.round(phase.illumination * 100)}% מואר). ${status}`;
+  }
+
+  // The moon's disc lit from the side of the sun: waxing lit on the right (as seen from Israel).
+  function drawMoon(canvas, elongation) {
+    const ctx = canvas.getContext('2d');
+    const size = canvas.width;
+    const r = size / 2 - 2;
+    const image = ctx.createImageData(size, size);
+    const e = elongation * Math.PI / 180;
+    const sx = Math.sin(e);
+    const sz = -Math.cos(e);
+    for (let py = 0; py < size; py++) {
+      for (let px = 0; px < size; px++) {
+        const x = (px + .5 - size / 2) / r;
+        const y = (py + .5 - size / 2) / r;
+        const r2 = x * x + y * y;
+        const i = (py * size + px) * 4;
+        if (r2 >= 1) { image.data[i + 3] = 0; continue; }
+        const z = Math.sqrt(1 - r2);
+        const t = clamp(((x * sx + z * sz) + .05) / .12, 0, 1);
+        const lit = t * t * (3 - 2 * t);
+        // A few soft "seas" so it reads as the moon.
+        const sea = Math.max(0, Math.sin(x * 5.2 + 1.1) * Math.sin(y * 4.3 - .4)) * .16;
+        const shade = (.8 + .2 * z) * (1 - sea);
+        image.data[i] = 34 + (238 * shade - 34) * lit;
+        image.data[i + 1] = 40 + (234 * shade - 40) * lit;
+        image.data[i + 2] = 58 + (214 * shade - 58) * lit;
+        image.data[i + 3] = Math.round(clamp((1 - Math.sqrt(r2)) * r, 0, 1) * 255);
+      }
+    }
+    ctx.putImageData(image, 0, 0);
+  }
+
   function bestKey() {
-    return `${courseKey(course, api.mapSize())}|${level}`;
+    // Dusk and night runs keep their own records; camels just add penalty time.
+    return `${courseKey(course, api.mapSize())}|${level}${timeOption === 'day' ? '' : `|${timeOption}`}`;
   }
 
   function updateBest() {
@@ -156,6 +254,7 @@ export function createNavGame(api) {
       + `<div class="nav-grid-list"><strong>נ״צ הנקודות (צפון/מזרח):</strong>${points.filter((p) => p.kind === 'control').map((p) => `<span><b>${p.number}</b> ${coordOf(p)}</span>`).join('')}</div>`;
     syncCustomControls();
     updateBest();
+    updateMoonPreview();
     setupDialog.showModal();
     requestAnimationFrame(() => drawMapInto(canvas, { done: 0, nextIndex: 1, showYou: false }));
   }
@@ -411,7 +510,8 @@ export function createNavGame(api) {
       flags.push(flag);
     });
 
-    // Sky dome that follows the camera.
+    // Sky dome that follows the camera. By day it is the plain gradient with the sun; at dusk
+    // and at night sky.js drives the colours, the twilight glow, the sun and a phased moon.
     const sky = new THREE.Mesh(
       new THREE.SphereGeometry(1, 32, 16),
       new THREE.ShaderMaterial({
@@ -422,15 +522,41 @@ export function createNavGame(api) {
           top: { value: new THREE.Color(0x4f8fc9) },
           horizon: { value: new THREE.Color(0xdfe9e2) },
           bottom: { value: new THREE.Color(0xb9c6b0) },
+          glow: { value: new THREE.Color(0x000000) },
           sun: { value: new THREE.Vector3(-.45, .55, .5).normalize() },
+          sunDisc: { value: 1 },
+          moon: { value: new THREE.Vector3(0, -1, 0) },
+          moonDisc: { value: 0 },
+          moonHalo: { value: 0 },
+          moonCos: { value: Math.cos(1.1 * Math.PI / 180) },
+          moonSin: { value: Math.sin(1.1 * Math.PI / 180) },
         },
         vertexShader: 'varying vec3 vDir; void main(){ vDir = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
-        fragmentShader: `uniform vec3 top; uniform vec3 horizon; uniform vec3 bottom; uniform vec3 sun; varying vec3 vDir;
+        fragmentShader: `uniform vec3 top; uniform vec3 horizon; uniform vec3 bottom; uniform vec3 glow; uniform vec3 sun; uniform float sunDisc;
+          uniform vec3 moon; uniform float moonDisc; uniform float moonHalo; uniform float moonCos; uniform float moonSin;
+          varying vec3 vDir;
           void main(){
-            float h = vDir.y;
+            vec3 d = normalize(vDir);
+            float h = d.y;
             vec3 c = h > 0.0 ? mix(horizon, top, pow(min(h * 1.6, 1.0), .75)) : mix(horizon, bottom, min(-h * 6.0, 1.0));
-            float s = max(dot(normalize(vDir), sun), 0.0);
-            c += vec3(1.0, .92, .75) * (pow(s, 220.0) * 1.2 + pow(s, 12.0) * .18);
+            // Twilight: a warm band over the horizon on the sun's side.
+            float sl = length(sun.xz);
+            float side = sl > 1e-4 ? dot(normalize(d.xz + vec2(1e-5)), sun.xz / sl) * .5 + .5 : .5;
+            c += glow * pow(side, 3.0) * (1.0 - smoothstep(0.0, .45, abs(h)));
+            float s = max(dot(d, sun), 0.0);
+            c += vec3(1.0, .92, .75) * (pow(s, 220.0) * 1.2 + pow(s, 12.0) * .18) * sunDisc;
+            // The moon: a ball lit by the sun, so its phase and the tilt of the crescent are real.
+            float cm = dot(d, moon);
+            c += vec3(.5, .58, .78) * pow(max(cm, 0.0), 90.0) * moonHalo;
+            if (moonDisc > 0.0 && cm > moonCos - .00002) {
+              vec3 t = (d - moon * cm) / moonSin;
+              float r2 = min(dot(t, t), 1.0);
+              vec3 n = t - moon * sqrt(1.0 - r2);
+              float lit = smoothstep(-.04, .08, dot(n, sun));
+              float sea = max(0.0, sin(n.x * 5.2 + 1.1) * sin(n.y * 4.3 - .4)) * .16;
+              vec3 surface = mix(vec3(.04, .05, .08), vec3(.98, .96, .88) * (.8 + .2 * sqrt(1.0 - r2)) * (1.0 - sea), lit);
+              c += surface * moonDisc * (1.0 - smoothstep(.9, 1.0, sqrt(r2)));
+            }
             gl_FragColor = vec4(c, 1.0);
           }`,
       }),
@@ -487,8 +613,166 @@ export function createNavGame(api) {
     droneShadow.renderOrder = 3;
     group.add(droneShadow);
 
+    // Dusk and night: stars that turn with the sky, and a headlamp.
+    let stars = null;
+    let lamp = null;
+    let lampTarget = null;
+    let spill = null;
+    if (timeOption !== 'day') {
+      stars = buildStars();
+      group.add(stars);
+      lamp = new THREE.SpotLight(0xfff1dc, 0, lampRange() * mtw, .5, .45, 0);
+      lampTarget = new THREE.Object3D();
+      lamp.target = lampTarget;
+      spill = new THREE.PointLight(0xffeedd, 0, 22 * mtw, 0);
+      group.add(lamp, lampTarget, spill);
+    }
+    const camels = buildCamels(group, CAMEL.counts[camelsOption] || 0);
+
     scene.add(group);
-    return { group, flags, sky, droneShadow, textures: [orange, magenta, ...extras.textures] };
+    return { group, flags, sky, droneShadow, stars, starBasis: new THREE.Matrix4(), lamp, lampTarget, spill, camels, textures: [orange, magenta, ...extras.textures] };
+  }
+
+  const lampRange = () => Math.max(60, api.extent() * .025); // metres lit ahead
+  const camelScale = () => clamp(api.extent() / 2500, 1, 2); // bigger on big maps, like the cairns
+
+  // Stars as points on a sphere around the camera: random faint ones plus the bright stars
+  // of sky.js at their real places, so Polaris marks north. Hidden behind the moon.
+  function buildStars() {
+    const rand = random(0x5747);
+    const list = [];
+    for (let i = 0; i < 1400; i++) {
+      const z = rand() * 2 - 1;
+      const a = rand() * Math.PI * 2;
+      const r = Math.sqrt(1 - z * z);
+      list.push({ x: r * Math.cos(a), y: r * Math.sin(a), z, mag: 2.6 + 3.4 * Math.sqrt(rand()), tint: rand() });
+    }
+    for (const [, ra, dec, mag] of BRIGHT_STARS) list.push({ ...starVector(ra, dec), mag, tint: .5 });
+    const positions = new Float32Array(list.length * 3);
+    const colours = new Float32Array(list.length * 3);
+    const sizes = new Float32Array(list.length);
+    list.forEach((star, i) => {
+      positions.set([star.x * 90, star.y * 90, star.z * 90], i * 3);
+      const brightness = clamp(1.3 - star.mag * .17, .12, 1.5);
+      const tint = star.tint < .15 ? [.75, .85, 1] : star.tint > .88 ? [1, .88, .72] : [1, 1, 1];
+      colours.set(tint.map((c) => c * brightness), i * 3);
+      sizes[i] = clamp(4.6 - star.mag * .8, 1.1, 6);
+    });
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geometry.setAttribute('starColor', new THREE.BufferAttribute(colours, 3));
+    geometry.setAttribute('size', new THREE.BufferAttribute(sizes, 1));
+    const material = new THREE.ShaderMaterial({
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      uniforms: {
+        opacity: { value: 0 },
+        moon: { value: new THREE.Vector3(0, -1, 0) },
+        moonCos: { value: Math.cos(1.5 * Math.PI / 180) },
+        scale: { value: Math.min(window.devicePixelRatio || 1, 2) },
+      },
+      vertexShader: `attribute float size; attribute vec3 starColor; uniform vec3 moon; uniform float moonCos; uniform float scale; varying vec3 vColor;
+        void main() {
+          vec4 world = modelMatrix * vec4(position, 1.0);
+          vec3 dir = normalize(world.xyz - cameraPosition);
+          vColor = starColor * (1.0 - step(moonCos, dot(dir, moon)));
+          gl_PointSize = size * scale;
+          gl_Position = projectionMatrix * viewMatrix * world;
+        }`,
+      fragmentShader: `uniform float opacity; varying vec3 vColor;
+        void main() { float d = length(gl_PointCoord - .5); gl_FragColor = vec4(vColor * opacity * smoothstep(.5, .15, d), 1.0); }`,
+    });
+    const points = new THREE.Points(geometry, material);
+    points.frustumCulled = false;
+    points.renderOrder = -9;
+    points.matrixAutoUpdate = false; // position (the camera) and rotation (the sky) set each frame
+    points.visible = false;
+    return points;
+  }
+
+  // Low-poly dromedaries (metres, facing −z, feet at y = 0). Legs and neck are pivots so they
+  // can walk — pacing, both legs on one side together — graze and raise their heads.
+  function buildCamels(group, count) {
+    if (!count) return [];
+    const sphere = (sx, sy, sz, x, y, z) => new THREE.SphereGeometry(1, 12, 8).scale(sx, sy, sz).translate(x, y, z);
+    const torso = mergeGeometries([
+      sphere(.42, .4, .86, 0, 1.45, 0),
+      sphere(.3, .4, .42, 0, 1.78, .1),
+      sphere(.22, .24, .28, 0, 1.36, -.7),
+      new THREE.CylinderGeometry(.025, .05, .55, 5).rotateX(.35).translate(0, 1.2, .9),
+    ]);
+    const neck = mergeGeometries([
+      new THREE.CylinderGeometry(.09, .15, 1, 7).translate(0, .5, 0).rotateX(-.72),
+      new THREE.BoxGeometry(.2, .21, .5).translate(0, 0, -.2).rotateX(.25).translate(0, .78, -.7),
+      new THREE.ConeGeometry(.04, .13, 4).translate(-.08, .93, -.6),
+      new THREE.ConeGeometry(.04, .13, 4).translate(.08, .93, -.6),
+    ]);
+    const eye = new THREE.SphereGeometry(.06, 6, 4);
+    const leg = new THREE.CylinderGeometry(.075, .05, 1.3, 6).translate(0, -.65, 0);
+    const scale = camelScale() * api.metersToWorld();
+    // A soft contact shadow (the sun's shadow map is far too coarse for a camel on a big map).
+    const shadowGeometry = new THREE.CircleGeometry(1, 20).rotateX(-Math.PI / 2);
+    const shadowMaterial = new THREE.MeshBasicMaterial({ color: 0x0b1410, transparent: true, opacity: .32, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4 });
+    const list = [];
+    for (let i = 0; i < count; i++) {
+      const tone = .9 + (i % 4) * .05;
+      const body = new THREE.MeshStandardMaterial({ color: new THREE.Color(0xc9a066).multiplyScalar(tone), roughness: .95, flatShading: true });
+      const legs = new THREE.MeshStandardMaterial({ color: new THREE.Color(0xa98048).multiplyScalar(tone), roughness: .95, flatShading: true });
+      const eyeMaterial = new THREE.MeshBasicMaterial({ color: 0xd9ffc8, transparent: true, opacity: 0, toneMapped: false, depthWrite: false, blending: THREE.AdditiveBlending });
+      const root = new THREE.Group();
+      root.add(new THREE.Mesh(torso, body));
+      const neckPivot = new THREE.Group();
+      neckPivot.position.set(0, 1.5, -.7);
+      neckPivot.add(new THREE.Mesh(neck, body));
+      const eyeGroup = new THREE.Group();
+      for (const x of [-.105, .105]) {
+        const ball = new THREE.Mesh(eye, eyeMaterial);
+        ball.position.set(x, .84, -.84);
+        eyeGroup.add(ball);
+      }
+      eyeGroup.visible = false;
+      neckPivot.add(eyeGroup);
+      root.add(neckPivot);
+      const hips = [[-.21, -.52], [.21, -.52], [-.21, .55], [.21, .55]].map(([x, z]) => {
+        const hip = new THREE.Group();
+        hip.position.set(x, 1.3, z);
+        hip.add(new THREE.Mesh(leg, legs));
+        root.add(hip);
+        return hip;
+      });
+      root.scale.setScalar(scale);
+      root.visible = false;
+      const shadow = new THREE.Mesh(shadowGeometry, shadowMaterial);
+      shadow.renderOrder = 3;
+      shadow.visible = false;
+      group.add(root, shadow);
+      list.push({ root, shadow, neck: neckPivot, legs: hips, eyes: eyeGroup, eyeMaterial, data: null, pose: -1.4 });
+    }
+    return list;
+  }
+
+  // Valley score on a coarse grid (a window of about 250 m: wadis, not single bumps).
+  function ensureValleyGrid() {
+    if (world.valley) return;
+    const n = 64;
+    const heights = new Float32Array(n * n);
+    for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) heights[y * n + x] = api.height(x / (n - 1), y / (n - 1));
+    world.valleyN = n;
+    world.valley = valleyScore(heights, n, clamp(Math.round(250 / (api.extent() / (n - 1))), 2, 10));
+  }
+
+  function spawnWorldCamels() {
+    if (!world?.camels?.length) return;
+    ensureValleyGrid();
+    camelRng = random((Math.random() * 2 ** 32) >>> 0);
+    const data = spawnCamels({ score: world.valley, n: world.valleyN, count: world.camels.length, rng: camelRng, extent: api.extent(), avoid: [points[0]] });
+    world.camels.forEach((camel, i) => {
+      camel.data = data[i] || null;
+      camel.root.visible = Boolean(camel.data);
+      camel.shadow.visible = Boolean(camel.data);
+      camel.pose = -1.4;
+    });
   }
 
   function disposeWorld() {
@@ -520,6 +804,18 @@ export function createNavGame(api) {
         const transparent = alpha < .99;
         if (material.transparent !== transparent) { material.transparent = transparent; material.needsUpdate = true; }
         material.opacity = alpha;
+      }
+      if (run.night) {
+        // At night the notes and flags only shine back when the headlamp points at them.
+        const material = flag.userData.kite.material;
+        let shine = (flag.userData.cairn ? .35 : .18) * (run.sky?.daylight ?? 1);
+        if (run.lamp && d < lampRange() * 4) {
+          const camera = api.camera();
+          toObject.subVectors(flag.position, camera.position).normalize();
+          const inBeam = toObject.dot(camera.getWorldDirection(viewDir));
+          shine = Math.max(shine, 1.6 * clamp((inBeam - .9) / .06, 0, 1));
+        }
+        material.emissiveIntensity = shine;
       }
       if (!flag.userData.cairn) flag.userData.kite.rotation.y += .004;
       else {
@@ -600,9 +896,264 @@ export function createNavGame(api) {
       droneTime: 0, droneSpeed: 0, lowWarned: false,
       // FPV racing mode (on top of the drone): momentum, banking, tricks.
       fpv: false, vel: { x: 0, y: 0, z: 0 }, roll: 0, fov: 92, shake: 0, maxSpeed: 0, tricks: 0, trick: null, crashes: 0, crashCool: 0, throttle: 0, boosting: false,
+      // Camels (camels.js): catches cost time and leave you stunned for a moment.
+      stun: 0, camelCatches: 0, camelEscapes: 0, chases: 0, camelTalk: -99, camelFlash: -99,
+      // Dusk / night (sky.js): a sky clock that runs as fast as the walking (≥ ×12).
+      night: timeOption !== 'day', clock: startClockFor(), startClock: startClockFor(),
+      timeScale: clamp(baseSpeed(api.extent()) / 1.4, 12, 30), lamp: false, lampHinted: false, skyTimer: 0, sky: null,
     };
     setDroneUi(false);
+    spawnWorldCamels();
+    configureNightUI();
     Object.assign(api.observer, { u: startPoint.u, v: startPoint.v, heading: 0, tilt: -4, bob: 0 });
+  }
+
+  function configureNightUI() {
+    document.body.classList.toggle('nav-night', run.night);
+    $('navLampBtn').hidden = !run.night;
+    $('navClock').hidden = !run.night;
+    setLamp(false, true);
+    if (run.night && world) applySky(skyState(run.clock, moonDay));
+    else api.setLighting?.(null);
+  }
+
+  function applySky(state) {
+    run.sky = state;
+    const u = world.sky.material.uniforms;
+    // Display values, passed through as-is (see sky.js).
+    u.top.value.setRGB(...state.sky.top);
+    u.horizon.value.setRGB(...state.sky.horizon);
+    u.bottom.value.setRGB(...state.sky.bottom);
+    u.glow.value.setRGB(...state.sky.glow);
+    u.sun.value.set(state.sun.x, state.sun.y, state.sun.z);
+    u.sunDisc.value = state.sunDisc;
+    u.moon.value.set(state.moon.x, state.moon.y, state.moon.z);
+    u.moonDisc.value = state.moonDisc;
+    u.moonHalo.value = state.moonHalo;
+    if (world.stars) {
+      const m = world.stars.material.uniforms;
+      m.opacity.value = state.stars;
+      m.moon.value.copy(u.moon.value);
+      world.stars.visible = state.stars > .01;
+      const [ex, ey, ez] = skyBasis(state.lst);
+      world.starBasis.set(ex.x, ey.x, ez.x, 0, ex.y, ey.y, ez.y, 0, ex.z, ey.z, ez.z, 0, 0, 0, 0, 1);
+    }
+    api.setLighting?.(state);
+  }
+
+  // The sky clock runs while navigating; the sky is recomputed a few times a second.
+  function advanceClock(dt) {
+    run.clock += dt * run.timeScale / 3600;
+    run.skyTimer -= dt;
+    if (run.skyTimer > 0) return;
+    run.skyTimer = .25;
+    applySky(skyState(run.clock, moonDay));
+    if (!run.lamp && !run.lampHinted && run.sky.dark > .8 && run.sky.moonlight < .45) {
+      run.lampHinted = true;
+      flash('🔦 חשוך! L (או כפתור הפנס) מדליק פנס ראש');
+    }
+  }
+
+  function setLamp(on, quiet = false) {
+    if (!run) return;
+    run.lamp = Boolean(on && run.night);
+    $('navLampBtn').setAttribute('aria-pressed', String(run.lamp));
+    $('navLampBtn').classList.toggle('on', run.lamp);
+    if (!quiet) beep([[run.lamp ? 1500 : 950, .035]]);
+  }
+
+  // Stars and the headlamp follow the camera.
+  function updateNightObjects() {
+    if (!world) return;
+    const camera = api.camera();
+    if (world.stars?.visible) {
+      world.stars.matrix.copy(world.starBasis).setPosition(camera.position);
+      world.stars.matrixWorldNeedsUpdate = true;
+    }
+    if (world.lamp) {
+      camera.getWorldDirection(lampDir);
+      lampDir.y -= .3;
+      lampDir.normalize();
+      world.lamp.position.copy(camera.position);
+      world.lampTarget.position.copy(camera.position).addScaledVector(lampDir, lampRange() * api.metersToWorld());
+      world.lampTarget.updateMatrixWorld();
+      world.lamp.intensity = run?.lamp ? LAMP_INTENSITY : 0;
+      world.spill.position.copy(camera.position);
+      world.spill.intensity = run?.lamp ? SPILL_INTENSITY : 0;
+    }
+  }
+
+  // ——— Camels ———
+  // How far camels notice you: less in the dark, more with a headlamp on.
+  function camelVisibility() {
+    if (!run.night) return 1;
+    if (run.lamp) return 1.5;
+    return .5 + .5 * Math.max(run.sky?.daylight ?? 1, (run.sky?.moonlight ?? 0) * .7);
+  }
+
+  function stepCamels(dt) {
+    const o = api.observer;
+    const extent = api.extent();
+    const ctx = {
+      dt, extent, walkSpeed: baseSpeed(extent), rng: camelRng,
+      player: { u: o.u, v: o.v, onFoot: !run.drone, visibility: camelVisibility() },
+      heightAt: api.height,
+      scoreAt: (u, v) => sampleGrid(world.valley, world.valleyN, u, v),
+    };
+    const active = world.camels.filter((camel) => camel.data);
+    for (const camel of active) {
+      const event = stepCamel(camel.data, ctx);
+      if (event) onCamelEvent(event);
+    }
+    separateCamels(active.map((camel) => camel.data), 4 * camelScale(), extent);
+  }
+
+  function onCamelEvent(event) {
+    const now = run.elapsed;
+    if (event === 'alert') {
+      if (now - run.camelTalk > 4) { run.camelTalk = now; growl(.45); }
+    } else if (event === 'chase') {
+      run.chases++;
+      growl(1);
+      if (now - run.camelFlash > 5) { run.camelFlash = now; flash('🐪 גמל רודף אחריכם! רוצו (Shift)', true); }
+    } else if (event === 'caught') {
+      run.camelCatches++;
+      run.stun = 1.3;
+      growl(1.2);
+      spitSound();
+      const spit = $('navSpit');
+      spit.classList.remove('hit');
+      void spit.offsetWidth;
+      spit.classList.add('hit');
+      run.camelFlash = now;
+      flash(`🐪 הגמל השיג אתכם וירק! +${CAMEL_PENALTY} ש׳`, true);
+      updatePeekUI();
+    } else if (event === 'escaped') {
+      run.camelEscapes++;
+      if (now - run.camelFlash > 3) { run.camelFlash = now; flash('😅 ברחתם מהגמל!'); }
+    }
+  }
+
+  function updateCamelMeshes(dt) {
+    if (!world?.camels?.length) return;
+    const W = api.worldSize();
+    const vs = api.verticalScale();
+    const mtw = api.metersToWorld();
+    const scale = camelScale();
+    const walk = baseSpeed(api.extent());
+    const camera = api.camera();
+    const lampOn = run?.night && run.lamp;
+    if (lampOn) camera.getWorldDirection(viewDir);
+    for (const camel of world.camels) {
+      const c = camel.data;
+      if (!c) continue;
+      const root = camel.root;
+      const moving = clamp(c.speed / (walk * .15), 0, 1);
+      const phase = c.gait / (2.2 * scale) * Math.PI * 2;
+      const swing = (c.state === 'chase' ? .62 : .38) * moving;
+      camel.legs.forEach((hip, i) => { hip.rotation.x = Math.sin(phase + (i % 2 ? Math.PI : 0)) * swing; });
+      root.position.set((c.u - .5) * W, groundAt(c.u, c.v) * vs + Math.abs(Math.sin(phase)) * .06 * scale * mtw * moving, (c.v - .5) * W);
+      root.rotation.y = -c.heading * Math.PI / 180;
+      // Shadow: an ellipse along the body, tilted to the (displayed) slope.
+      const e = 3 / api.extent();
+      const gx = (groundDisplay(clamp(c.u + e, 0, 1), c.v) - groundDisplay(clamp(c.u - e, 0, 1), c.v)) / 6;
+      const gz = (groundDisplay(c.u, clamp(c.v + e, 0, 1)) - groundDisplay(c.u, clamp(c.v - e, 0, 1))) / 6;
+      shadowNormal.set(-gx, 1, -gz).normalize();
+      camel.shadow.quaternion.setFromUnitVectors(UP, shadowNormal).multiply(headingTurn.setFromAxisAngle(UP, -c.heading * Math.PI / 180));
+      camel.shadow.position.set(root.position.x, groundAt(c.u, c.v) * vs + .15 * mtw, root.position.z);
+      camel.shadow.scale.set(.75 * scale * mtw, 1, 1.35 * scale * mtw);
+      const pose = c.state === 'alert' ? .38 : c.state === 'chase' ? -.22 : moving > .2 ? -.38 : -1.4;
+      camel.pose += (pose - camel.pose) * Math.min(1, dt * 3);
+      camel.neck.rotation.x = camel.pose;
+      // Eyeshine: caught in the headlamp, a camel's eyes glow back.
+      let glow = 0;
+      if (lampOn) {
+        toObject.subVectors(root.position, camera.position);
+        const distance = toObject.length() / mtw;
+        toObject.normalize();
+        const inBeam = toObject.dot(viewDir);
+        const h = c.heading * Math.PI / 180;
+        const facing = -(Math.sin(h) * toObject.x - Math.cos(h) * toObject.z);
+        if (inBeam > .86 && facing > .2 && distance < lampRange() * 5) glow = clamp((inBeam - .86) / .08, 0, 1) * clamp(facing * 1.5, 0, 1);
+      }
+      camel.eyes.visible = glow > .02;
+      camel.eyeMaterial.opacity = glow;
+      for (const ball of camel.eyes.children) ball.scale.setScalar(1 + glow * 1.8); // a glint you can spot from afar
+    }
+  }
+
+  // Warning chip and a 🐪 on the compass while one is chasing you.
+  function updateCamelAlert() {
+    const chip = $('navCamelAlert');
+    const marker = $('navCompassCamel');
+    let nearest = null;
+    if (world?.camels?.length && !run.drone) {
+      const extent = api.extent();
+      for (const camel of world.camels) {
+        if (!camel.data || camel.data.state !== 'chase') continue;
+        const d = metersBetween(camel.data, api.observer, extent);
+        if (!nearest || d < nearest.d) nearest = { camel: camel.data, d };
+      }
+    }
+    chip.hidden = !nearest;
+    marker.hidden = !nearest;
+    if (!nearest) return;
+    chip.textContent = `🐪 גמל רודף אחריכם · ${Math.round(nearest.d)} מ׳`;
+    chip.classList.toggle('near', nearest.d < detectRadius(api.extent()) * .35);
+    const o = api.observer;
+    const delta = ((bearingDegrees(o, nearest.camel) - o.heading + 540) % 360) - 180;
+    const half = $('navCompass').clientWidth / 2 / COMPASS_PX - 4;
+    marker.style.transform = `translateX(${clamp(delta, -half, half) * COMPASS_PX}px)`;
+  }
+
+  function growl(strength = 1) {
+    if (!soundOn) return;
+    try {
+      audio ||= new (window.AudioContext || window.webkitAudioContext)();
+      const t = audio.currentTime;
+      const osc = audio.createOscillator();
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(96, t);
+      osc.frequency.linearRampToValueAtTime(68, t + .65);
+      const wobble = audio.createOscillator();
+      wobble.frequency.value = 17;
+      const depth = audio.createGain();
+      depth.gain.value = 24;
+      wobble.connect(depth).connect(osc.frequency);
+      const filter = audio.createBiquadFilter();
+      filter.type = 'lowpass';
+      filter.frequency.value = 640;
+      const gain = audio.createGain();
+      gain.gain.setValueAtTime(.0001, t);
+      gain.gain.exponentialRampToValueAtTime(.15 * strength, t + .06);
+      gain.gain.exponentialRampToValueAtTime(.0001, t + .75);
+      osc.connect(filter).connect(gain).connect(audio.destination);
+      osc.start(t);
+      wobble.start(t);
+      osc.stop(t + .8);
+      wobble.stop(t + .8);
+    } catch { /* audio unavailable */ }
+  }
+
+  function spitSound() {
+    if (!soundOn) return;
+    try {
+      audio ||= new (window.AudioContext || window.webkitAudioContext)();
+      const length = .28;
+      const buffer = audio.createBuffer(1, Math.round(audio.sampleRate * length), audio.sampleRate);
+      const data = buffer.getChannelData(0);
+      for (let i = 0; i < data.length; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / data.length) ** 2;
+      const source = audio.createBufferSource();
+      source.buffer = buffer;
+      const filter = audio.createBiquadFilter();
+      filter.type = 'bandpass';
+      filter.frequency.value = 1700;
+      filter.Q.value = .8;
+      const gain = audio.createGain();
+      gain.gain.value = .35;
+      source.connect(filter).connect(gain).connect(audio.destination);
+      source.start(audio.currentTime + .3);
+    } catch { /* audio unavailable */ }
   }
 
   function start() {
@@ -659,10 +1210,14 @@ export function createNavGame(api) {
   function updatePeekUI() {
     $('navPeekCount').textContent = run?.peeks ? `${run.peeks} הצצות` : '';
     $('navPeekBtn').querySelector('span').textContent = run?.peekOpen ? 'סגירת המפה' : 'הצצה במפה';
-    const penalty = (run?.peeks || 0) * PEEK_PENALTY;
-    $('navPenalty').hidden = !penalty;
-    $('navPenalty').textContent = `עונש הצצות: +${penalty} ש׳`;
+    const peeks = (run?.peeks || 0) * PEEK_PENALTY;
+    const camels = (run?.camelCatches || 0) * CAMEL_PENALTY;
+    $('navPenalty').hidden = !(peeks + camels);
+    $('navPenalty').textContent = `עונש: ${[peeks ? `הצצות +${peeks} ש׳` : '', camels ? `🐪 +${camels} ש׳` : ''].filter(Boolean).join(' · ')}`;
   }
+
+  // Seconds added to the clock: map peeks and camel catches.
+  const penaltySeconds = () => (run ? run.peeks * PEEK_PENALTY + run.camelCatches * CAMEL_PENALTY : 0);
 
   // Phones show the map as a thumbnail that opens into a large sheet on tap.
   const compactLayout = matchMedia('(max-width: 640px), (pointer: coarse) and (max-height: 500px)');
@@ -763,6 +1318,8 @@ export function createNavGame(api) {
     $('navPause').hidden = true;
     $('navCountdown').hidden = true;
     resultsDialog.open && resultsDialog.close();
+    document.body.classList.remove('nav-night');
+    $('navCamelAlert').hidden = true;
     disposeWorld();
     api.exit();
   }
@@ -1236,6 +1793,7 @@ export function createNavGame(api) {
   $('droneLandBtn').addEventListener('click', () => beginLanding());
   $('droneModeBtn').addEventListener('click', () => setFpv(!run?.fpv));
   $('droneTrickBtn').addEventListener('click', () => startTrick());
+  $('navLampBtn').addEventListener('click', () => setLamp(!run?.lamp));
   // Five quick taps on the timer (the way in on touch screens).
   // Counted as a streak: each tap must come within 0.9 s of the previous one.
   $('navTimer').addEventListener('click', () => {
@@ -1259,6 +1817,7 @@ export function createNavGame(api) {
       if (run?.fpv && event.code === 'KeyR') { event.preventDefault(); startTrick(); return; }
     }
     if (event.code === 'KeyM') { event.preventDefault(); if (!event.repeat) toggleMap(); return; }
+    if (event.code === 'KeyL' && run?.night) { event.preventDefault(); if (!event.repeat) setLamp(!run.lamp); return; }
     if (MOVE_KEYS.has(event.code)) { event.preventDefault(); keys.add(event.code); }
   }, true);
   document.addEventListener('keyup', (event) => keys.delete(event.code), true);
@@ -1305,7 +1864,10 @@ export function createNavGame(api) {
       run.elapsed += dt;
       if (!run.fpv) o.heading = (o.heading + turn * TURN_SPEED * dt + 360) % 360;
       const extent = api.extent();
-      const moving = Math.hypot(forward, strafe) > .05;
+      // A camel that caught you leaves you stunned for a moment.
+      const stunned = run.stun > 0;
+      if (stunned) run.stun -= dt;
+      const moving = !stunned && Math.hypot(forward, strafe) > .05;
       if (run.fpv) {
         fpvStep(dt, {
           throttle: (has('KeyW') ? 1 : 0) - (has('KeyS') ? 1 : 0) + sticks.move.y,
@@ -1371,11 +1933,15 @@ export function createNavGame(api) {
         if (Math.hypot(last.u - o.u, last.v - o.v) > .0008) run.track.push({ u: o.u, v: o.v, fly: run.drone });
       }
       checkControls();
+      if (world?.camels?.length) stepCamels(dt);
+      if (run.night) advanceClock(dt);
     }
     api.updateCamera();
     if (world) {
       world.sky.position.copy(api.camera().position);
       if (run) updateFlags();
+      updateNightObjects();
+      updateCamelMeshes(dt);
     }
     if (run) {
       updateCompass();
@@ -1390,8 +1956,12 @@ export function createNavGame(api) {
   }
 
   function updateHudText() {
-    const penalty = run.peeks * PEEK_PENALTY;
-    $('navTimer').textContent = formatClock(run.elapsed + penalty);
+    $('navTimer').textContent = formatClock(run.elapsed + penaltySeconds());
+    if (run.night && run.sky) {
+      const icon = run.sky.dark > .6 ? run.sky.phase.emoji : run.sky.sunAlt > 0 ? '🌇' : '🌆';
+      $('navClock').textContent = `${icon} ${formatHour(run.clock)}`;
+    }
+    updateCamelAlert();
     const pace = clamp(run.pace / 1.1, 0, 1);
     $('navPaceBar').style.width = `${Math.round(pace * 100)}%`;
     $('navPaceBar').style.background = `hsl(${Math.round(pace * 120)} 65% 58%)`;
@@ -1424,8 +1994,8 @@ export function createNavGame(api) {
     phase = 'finished';
     keys.clear();
     const extent = api.extent();
-    const penalty = run.peeks * PEEK_PENALTY;
-    const total = totalScore({ elapsed: run.elapsed, peeks: run.peeks, penaltyPerPeek: PEEK_PENALTY });
+    const penalty = penaltySeconds();
+    const total = totalScore({ elapsed: run.elapsed + run.camelCatches * CAMEL_PENALTY, peeks: run.peeks, penaltyPerPeek: PEEK_PENALTY });
     const straight = courseLength(course, extent);
     const efficiency = run.walked ? Math.min(1, straight / run.walked) : 1;
     const bests = readStorage(BEST_KEY, {});
@@ -1451,6 +2021,8 @@ export function createNavGame(api) {
       ...(run.maxSpeed > 0 ? [['מהירות שיא', `${Math.round(run.maxSpeed * 3.6)} קמ״ש`]] : []),
       ...(run.tricks ? [['טריקים', `🌀 ${run.tricks}`]] : []),
       ...(run.crashes ? [['התרסקויות', `💥 ${run.crashes}`]] : []),
+      ...(world?.camels?.some((camel) => camel.data) ? [['🐪 גמלים', run.camelCatches || run.camelEscapes ? `נתפסתם ${run.camelCatches} · ברחתם ${run.camelEscapes}` : 'לא נתפסתם']] : []),
+      ...(run.night ? [[`${moonPhase(moonDay, run.clock).emoji} שעה`, `${formatHour(run.startClock)}–${formatHour(run.clock)} · ${hebrewDay(moonDay)} בחודש`]] : []),
       [settings.mapMode === 'peek' ? 'הצצות במפה' : 'מפה', settings.mapMode === 'peek' ? String(run.peeks) : settings.mapMode === 'none' ? 'מהזיכרון' : 'פתוחה'],
     ];
     $('navResultGrid').innerHTML = cells.map(([label, value]) => `<div><small>${label}</small><strong>${value}</strong></div>`).join('');
@@ -1504,6 +2076,29 @@ export function createNavGame(api) {
     },
     // Test hooks: toggle the drone (same as typing the cheat) and read its state.
     debugDrone() { toggleDrone(); },
+    // Test hook: put the first camel `meters` ahead of the walker (state 'graze' or 'chase').
+    debugCamel(meters = 80, state = 'graze', turn = 180) {
+      const camel = world?.camels?.find((c) => c.data);
+      if (!camel || !run) return false;
+      const o = api.observer;
+      const h = o.heading * Math.PI / 180;
+      Object.assign(camel.data, {
+        u: clamp(o.u + Math.sin(h) * meters / api.extent(), .01, .99), v: clamp(o.v - Math.cos(h) * meters / api.extent(), .01, .99),
+        state, timer: state === 'chase' ? 20 : state === 'rest' ? 30 : 0, wanderTimer: 99, target: null, aggression: 1, heading: (o.heading + turn) % 360,
+      });
+      // Aim the view at it (ground heights in display metres, as drawn).
+      const exaggeration = api.verticalScale() / api.metersToWorld();
+      const rise = (groundAt(camel.data.u, camel.data.v) - groundAt(o.u, o.v)) * exaggeration + 1.4 * camelScale() - 2.1;
+      o.tilt = clamp(Math.atan2(rise, meters) * 180 / Math.PI, -40, 35);
+      return true;
+    },
+    // Test hook: set the sky clock (hours on the evening clock).
+    debugClock(hour) {
+      if (!run?.night) return;
+      run.clock = hour;
+      run.skyTimer = 0;
+      applySky(skyState(run.clock, moonDay));
+    },
     // Test hook: stand at a map position with a heading.
     debugPlace(u, v, heading = 0) {
       if (run) Object.assign(api.observer, { u, v, heading, tilt: -6 });
@@ -1518,6 +2113,9 @@ export function createNavGame(api) {
       phase, level, settings: { ...settings }, next: run.next, elapsed: run.elapsed, peeks: run.peeks, walked: run.walked, ascent: run.ascent, splits: run.splits.length,
       drone: { active: run.drone, landing: run.landing, used: run.droneUsed, agl: run.drone ? droneAgl() : 0, battery: run.battery, flown: run.flown,
         fpv: run.fpv, speedKmh: Math.round(run.droneSpeed * 3.6), maxKmh: Math.round(run.maxSpeed * 3.6), tricks: run.tricks, crashes: run.crashes, fov: run.fov, roll: api.observer.roll || 0 },
+      camels: (world?.camels || []).filter((camel) => camel.data).map((camel) => ({ u: camel.data.u, v: camel.data.v, state: camel.data.state, distance: metersBetween(camel.data, api.observer, api.extent()) })),
+      camelCatches: run.camelCatches, camelEscapes: run.camelEscapes, stun: run.stun, penalty: penaltySeconds(),
+      night: run.night ? { clock: run.clock, lamp: run.lamp, dark: run.sky?.dark, moonlight: run.sky?.moonlight, moonAlt: run.sky?.moonAlt, moonAz: run.sky?.moonAz, sunAlt: run.sky?.sunAlt, phase: run.sky?.phase.name, stars: run.sky?.stars } : null,
     } : { phase }),
   };
 }

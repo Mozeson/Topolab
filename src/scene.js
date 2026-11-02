@@ -735,6 +735,9 @@ const view3d = { contours: false, grid: false, strata: true, shadows: true, auto
 try { Object.assign(view3d, JSON.parse(localStorage.getItem(VIEW3D_KEY) || '{}')); } catch { /* storage unavailable */ }
 let shadowCatcher = null;
 let fillLight = null;
+let hemiLight = null;
+// Night navigation (nav-game.js + sky.js) recolours the fog; the drone only moves it out.
+let gameFog = null; // { color: [r, g, b] sRGB, scale } or null for the daytime haze
 let skirtUniforms = null;
 const defaultTarget = new THREE.Vector3(0, -0.45, 0);
 let savedOrbitPosition = null;
@@ -931,7 +934,8 @@ function initThree() {
 
     // Cartographic lighting: the sun from the north-west (north is -z), fairly low so the
     // relief reads clearly, plus a soft sky fill and a faint counter-light from the south-east.
-    scene.add(new THREE.HemisphereLight(0xf2f5ff, 0x5a6650, 1.15));
+    hemiLight = new THREE.HemisphereLight(0xf2f5ff, 0x5a6650, 1.15);
+    scene.add(hemiLight);
     fillLight = new THREE.DirectionalLight(0xdfe8ff, .35);
     fillLight.position.set(10, 8, 9);
     scene.add(fillLight);
@@ -2059,8 +2063,57 @@ function enterGameMode({ exaggeration = 1 } = {}) {
   requestAnimationFrame(() => { resizeThree(); updateObserverCamera(); });
 }
 
+// The field's haze: farther while flying; at night darker and closer (gameFog).
+function applyGameFog() {
+  if (!scene?.fog || !state.navigating) return;
+  const drone = state.observer.drone;
+  const scale = gameFog?.scale ?? 1;
+  scene.fog.near = WORLD_SIZE * (drone ? .7 : .3) * scale;
+  scene.fog.far = WORLD_SIZE * (drone ? 2.8 : 1.45) * scale;
+  if (gameFog) scene.fog.color.setRGB(...gameFog.color, THREE.SRGBColorSpace);
+  else scene.fog.color.set(0xdfe9e2);
+  if (scene.background?.isColor) scene.background.copy(scene.fog.color);
+}
+
+// Lights for a sky state from sky.js (the key light follows the sun or the moon), or the
+// default daylight when `sky` is null.
+function setGameLighting(sky) {
+  if (!scene || !sunLight) return;
+  const sizeFactor = state.mapSize / 4;
+  if (!sky) {
+    gameFog = null;
+    sunLight.color.set(0xfff1d6);
+    sunLight.intensity = 2.6;
+    sunLight.position.set(-10 * sizeFactor, 13 * sizeFactor, -9 * sizeFactor);
+    hemiLight?.color.set(0xf2f5ff);
+    hemiLight?.groundColor.set(0x5a6650);
+    if (hemiLight) hemiLight.intensity = 1.15;
+    if (fillLight) fillLight.intensity = .35;
+    renderer.toneMappingExposure = .96;
+  } else {
+    const { dir, intensity, color } = sky.key;
+    sunLight.color.setRGB(...color, THREE.SRGBColorSpace);
+    sunLight.intensity = intensity;
+    // Keep the light just above the horizon so shadows stay sane as the body sets.
+    const y = Math.max(dir.y, .03);
+    const length = Math.hypot(dir.x, y, dir.z);
+    sunLight.position.set(dir.x / length, y / length, dir.z / length).multiplyScalar(18 * sizeFactor);
+    if (hemiLight) {
+      hemiLight.color.setRGB(...sky.hemi.sky, THREE.SRGBColorSpace);
+      hemiLight.groundColor.setRGB(...sky.hemi.ground, THREE.SRGBColorSpace);
+      hemiLight.intensity = sky.hemi.intensity;
+    }
+    if (fillLight) fillLight.intensity = sky.fill;
+    renderer.toneMappingExposure = sky.exposure;
+    gameFog = sky.fog;
+  }
+  applyGameFog();
+  needsRender = true;
+}
+
 function exitGameMode() {
   if (!state.navigating) return;
+  setGameLighting(null);
   state.navigating = false;
   document.body.classList.remove('navigating');
   document.querySelector('#zoomJoystick .joystick-tag').textContent = 'קירוב';
@@ -2804,6 +2857,8 @@ window.__NAV_TELEPORT__ = () => navGame?.debugTeleport();
 window.__NAV_LOOK_AT_NEXT__ = (meters) => navGame?.debugApproach(meters);
 window.__NAV_PLACE__ = (u, v, heading) => navGame?.debugPlace(u, v, heading);
 window.__NAV_DRONE__ = () => navGame?.debugDrone();
+window.__NAV_CAMEL__ = (meters, camelState, turn) => navGame?.debugCamel(meters, camelState, turn);
+window.__NAV_CLOCK__ = (hour) => navGame?.debugClock(hour);
 window.__APP_STATS__ = () => ({
   gridVertices: N * N,
   gridResolution: N,
@@ -2937,13 +2992,12 @@ navGame = createNavGame({
   // Drone mode: wider lens and a longer view (the fog moves out while flying).
   setDrone: (on) => {
     state.observer.drone = on;
-    if (scene?.fog && state.navigating) {
-      scene.fog.near = WORLD_SIZE * (on ? .7 : .3);
-      scene.fog.far = WORLD_SIZE * (on ? 2.8 : 1.45);
-    }
+    applyGameFog();
     resizeThree();
     updateObserverCamera();
   },
+  // Dusk / night (sky.js skyState) or null to restore daylight.
+  setLighting: setGameLighting,
   invalidate: () => { needsRender = true; },
   renderMapBase: (ctx, w, h, dpr) => drawPrintBlock(ctx, w, h, dpr, { mapStyle: 'hypsometric', tintOpacity: .4, showGrid: false, showCoordinates: false, showFeatures: true }),
   enter: enterGameMode,

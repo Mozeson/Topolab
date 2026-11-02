@@ -1019,3 +1019,39 @@ body.fpv-mode .drone-trick { display: block; }
   .drone-keys, body.fpv-mode .drone-keys-fpv { display: none; }
   .fpv-horizon i { left: -110px; width: 220px; }
 }
+
+/* ——— Camels and night navigation (camels.js, sky.js) ——— */
+.nav-moon { display: flex; gap: 12px; align-items: center; padding: 10px 12px; border-radius: 12px; background: linear-gradient(135deg, #111b33, #27375c); color: #e8ecf8; }
+.nav-moon[hidden] { display: none; }
+.nav-moon canvas { width: 56px; height: 56px; flex: none; filter: drop-shadow(0 0 8px rgb(255 245 210 / 35%)); }
+.nav-moon-controls { display: grid; gap: 4px; flex: 1; min-width: 0; font-size: 13px; }
+.nav-moon-day { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.nav-moon-day b { font-size: 16px; color: #ffe39a; }
+.nav-moon input[type="range"] { width: 100%; accent-color: #ffd36e; }
+.nav-moon-hour { display: flex; align-items: center; gap: 8px; }
+.nav-moon-hour[hidden] { display: none; }
+.nav-moon select { padding: 2px 6px; border: 1px solid #5a6a93; border-radius: 6px; background: #1b2747; color: #fff; font: inherit; }
+.nav-moon-info { margin: 0; color: #c9d3ee; font-size: 12px; line-height: 1.45; }
+.nav-clock { font-size: 13px; font-weight: 700; color: #d6e2ff; letter-spacing: .02em; }
+.nav-lamp-btn { font-size: 18px; line-height: 1; }
+.nav-lamp-btn.on { background: #ffd36e; border-color: #ffd36e; box-shadow: 0 0 14px rgb(255 211 110 / 70%); }
+.nav-camel-alert { position: absolute; top: 102px; left: 50%; transform: translateX(-50%); padding: 6px 14px; border-radius: 999px; background: rgb(160 82 24 / 90%); color: #fff; font-size: 14px; font-weight: 700; white-space: nowrap; box-shadow: 0 4px 14px rgb(0 0 0 / 30%); pointer-events: none; animation: nav-camel-pulse 1s ease-in-out infinite; }
+.nav-camel-alert.near { background: rgb(200 32 32 / 92%); animation-duration: .45s; }
+@keyframes nav-camel-pulse { 50% { transform: translateX(-50%) scale(1.06); } }
+.nav-compass-camel { position: absolute; top: 0; left: 50%; width: 22px; margin-left: -11px; font-size: 16px; line-height: 1; text-align: center; filter: drop-shadow(0 0 3px #e0442c) drop-shadow(0 0 1px #fff); }
+.nav-spit { position: absolute; inset: 0; pointer-events: none; opacity: 0;
+  background:
+    radial-gradient(ellipse 9% 7% at 40% 44%, rgb(222 236 200 / 92%) 0 55%, transparent 100%),
+    radial-gradient(ellipse 12% 9% at 56% 54%, rgb(206 226 182 / 88%) 0 50%, transparent 100%),
+    radial-gradient(ellipse 4% 3% at 64% 36%, rgb(226 238 206 / 85%) 0 50%, transparent 100%),
+    radial-gradient(ellipse 3% 4% at 47% 66%, rgb(214 232 194 / 80%) 0 50%, transparent 100%),
+    radial-gradient(ellipse 5% 3% at 31% 58%, rgb(214 232 194 / 75%) 0 50%, transparent 100%); }
+.nav-spit.hit { animation: nav-spit 2.6s ease-out; }
+@keyframes nav-spit { 0% { opacity: 1; } 55% { opacity: .85; } 100% { opacity: 0; } }
+/* Night: the map read by a red-filtered torch. */
+body.nav-night #navMapCanvas { filter: sepia(.5) hue-rotate(-25deg) saturate(1.5) brightness(.86); }
+@media (max-width: 640px), (pointer: coarse) and (max-height: 500px) {
+  .nav-camel-alert { top: 118px; font-size: 13px; }
+  .nav-moon { gap: 8px; padding: 8px; }
+  .nav-moon canvas { width: 44px; height: 44px; }
+}
