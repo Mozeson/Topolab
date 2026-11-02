@@ -40,7 +40,7 @@ const SHAPE_HINTS = {
 };
 const state = {
   tool: 'raise',          // 'raise' | 'lower' | 'smooth' | 'smudge' | 'pinch' | 'flatten' | 'pan' | 'features' | 'course'
-  lastShapeTool: 'smudge', // which shape tool the "עיצוב" rail button stands for
+  lastSculptTool: 'raise', // which sculpt tool the "עיצוב" rail button stands for
   flattenTarget: 0,       // height (m) the flatten tool levels to, set when a stroke starts
   course: emptyCourse(),  // orienteering course (course.js)
   coursePlace: 'control', // what a click places with the course tool: 'start' | 'control' | 'finish'
@@ -300,14 +300,12 @@ function formatMapDistance(meters) {
   return `${Math.round(meters)} מ׳`;
 }
 
+// The map can be dragged at any zoom (middle button, Space, the pan tool) and the zoom
+// never changes while panning; at least ~35% of the map always stays in view.
 function clampMapPan(baseSide = mapFitSide()) {
-  const limit = Math.max(0, (baseSide * state.mapView.zoom - baseSide) / 2);
+  const limit = Math.max(0, (baseSide * state.mapView.zoom - baseSide) / 2) + baseSide * .32;
   state.mapView.panX = clamp(state.mapView.panX, -limit, limit);
   state.mapView.panY = clamp(state.mapView.panY, -limit, limit);
-  if (state.mapView.zoom === 1) {
-    state.mapView.panX = 0;
-    state.mapView.panY = 0;
-  }
 }
 
 function positionMapOverlays(baseSide) {
@@ -319,6 +317,9 @@ function positionMapOverlays(baseSide) {
   const mode = $('mapModeLabel');
   const view = $('mapViewLabel');
   const zoomControls = document.querySelector('.map-zoom-controls');
+  const infoToggle = $('waterInfoBtn');
+  infoToggle.style.right = `${offsetX + 14}px`;
+  infoToggle.style.top = `${offsetY + 14}px`;
   north.style.left = `${offsetX + 14}px`;
   north.style.top = `${offsetY + 13}px`;
   scale.style.left = `${offsetX + 15}px`;
@@ -1425,20 +1426,22 @@ function syncToolUI() {
   const label = $('toolMode');
   label.textContent = TOOL_LABELS[tool];
   label.className = `options-tool ${tool}`;
-  // Shape tools share one rail button and pick their mode in the options bar.
+  // Every sculpt tool lives under the one "עיצוב" rail button; the mode is picked in the
+  // options bar (or from the right-click menu). The button remembers the last mode.
+  const sculpting = isSculptTool(tool);
+  if (sculpting) state.lastSculptTool = tool;
+  const sculptButton = $('sculptBtn');
+  sculptButton.dataset.tool = state.lastSculptTool;
+  sculptButton.dataset.shortcut = `tool-${state.lastSculptTool}`;
+  sculptButton.title = `עיצוב השטח — ${TOOL_LABELS[state.lastSculptTool]} (${shortcutLabel(`tool-${state.lastSculptTool}`)})`;
+  sculptButton.classList.toggle('active', sculpting);
+  sculptButton.setAttribute('aria-pressed', String(sculpting));
+  sculptButton.dataset.mode = state.lastSculptTool;
+  $('sculptSub').textContent = TOOL_LABELS[state.lastSculptTool];
   const shaping = SHAPE_TOOLS.includes(tool);
-  if (shaping) state.lastShapeTool = tool;
-  const shapeButton = $('shapeBtn');
-  shapeButton.dataset.tool = state.lastShapeTool;
-  shapeButton.dataset.shortcut = `tool-${state.lastShapeTool}`;
-  shapeButton.title = `עיצוב השטח — ${TOOL_LABELS[state.lastShapeTool]} (${shortcutLabel(`tool-${state.lastShapeTool}`)})`;
-  shapeButton.classList.toggle('active', shaping);
-  shapeButton.setAttribute('aria-pressed', String(shaping));
-  label.hidden = shaping;
-  $('shapeModes').hidden = !shaping;
   $('shapeHint').hidden = !shaping;
   $('shapeHint').textContent = SHAPE_HINTS[tool] || '';
-  for (const button of document.querySelectorAll('[data-shape]')) button.setAttribute('aria-checked', String(button.dataset.shape === tool));
+  for (const button of document.querySelectorAll('[data-sculpt]')) button.setAttribute('aria-checked', String(button.dataset.sculpt === tool));
   refreshPanCursor();
   updateBrushRing();
   drawMap();
@@ -1953,7 +1956,66 @@ mapCanvas.addEventListener('pointerleave', (event) => {
   else if (!state.drawing) { state.pointer = null; updateBrushRing(); drawMap(); }
   else if (event.pointerType === 'mouse') stopDrawing(event);
 });
-mapCanvas.addEventListener('contextmenu', (event) => event.preventDefault());
+mapCanvas.addEventListener('contextmenu', (event) => {
+  event.preventDefault();
+  if (state.navigating) return;
+  stopDrawing();
+  openMapMenu(event.clientX, event.clientY);
+});
+// Middle-button drags pan the map: stop the browser's autoscroll from starting.
+mapCanvas.addEventListener('mousedown', (event) => { if (event.button === 1) event.preventDefault(); });
+mapCanvas.addEventListener('auxclick', (event) => { if (event.button === 1) event.preventDefault(); });
+
+// ——— Right-click menu: pick any tool where you are working ———
+const MENU_ICONS = {
+  raise: '<path d="M12 5v14M5 12h14"/>',
+  lower: '<path d="M5 12h14"/>',
+  smooth: '<path d="M3 15c3-4 5-6 9-6s6 2 9 6"/>',
+  smudge: '<path d="M3 17c3-1 4-5 7-5s3 4 6 4 4-3 5-4"/><path d="m14 5 3 3-3 3"/>',
+  pinch: '<path d="M4 6l6 6-6 6M20 6l-6 6 6 6"/>',
+  flatten: '<path d="M3 16h18M6 12h12"/>',
+  pan: '<path d="M12 3v18M3 12h18M12 3l-3 3M12 3l3 3M12 21l-3-3M12 21l3-3M3 12l3-3M3 12l3 3M21 12l-3-3M21 12l-3 3"/>',
+  features: '<path d="M3 18c4-6 7-9 10-9 2 0 3 2 5 2 1 0 2-1 3-3"/>',
+  course: '<path d="M5 21V4h12l-3 4 3 4H5"/>',
+  drop: '<path d="M12 3s6 6.5 6 11a6 6 0 0 1-12 0c0-4.5 6-11 6-11Z"/>',
+};
+const MENU_LAYOUT = [['title', 'עיצוב השטח'], 'raise', 'lower', 'smooth', 'smudge', 'pinch', 'flatten', '-', 'pan', 'features', 'course', 'drop'];
+const mapMenu = $('mapMenu');
+
+function openMapMenu(x, y) {
+  mapMenu.innerHTML = MENU_LAYOUT.map((item) => {
+    if (item === '-') return '<hr>';
+    if (Array.isArray(item)) return `<div class="menu-title">${item[1]}</div>`;
+    const key = shortcutLabel(`tool-${item}`);
+    return `<button type="button" role="menuitemradio" data-menu-tool="${item}" aria-checked="${state.tool === item}"><svg viewBox="0 0 24 24" aria-hidden="true">${MENU_ICONS[item]}</svg><span>${TOOL_LABELS[item]}</span>${key ? `<kbd>${key}</kbd>` : ''}</button>`;
+  }).join('');
+  mapMenu.hidden = false;
+  const rect = mapMenu.getBoundingClientRect();
+  mapMenu.style.left = `${Math.min(x, innerWidth - rect.width - 8)}px`;
+  mapMenu.style.top = `${Math.min(y, innerHeight - rect.height - 8)}px`;
+  mapMenu.querySelector('[aria-checked="true"]')?.focus() || mapMenu.querySelector('button')?.focus();
+}
+
+function closeMapMenu() {
+  mapMenu.hidden = true;
+}
+
+mapMenu.addEventListener('click', (event) => {
+  const button = event.target.closest('[data-menu-tool]');
+  if (!button) return;
+  setTool(button.dataset.menuTool);
+  closeMapMenu();
+  mapCanvas.focus({ preventScroll: true });
+});
+mapMenu.addEventListener('keydown', (event) => {
+  const items = [...mapMenu.querySelectorAll('button')];
+  const index = items.indexOf(document.activeElement);
+  if (event.key === 'ArrowDown') { items[(index + 1) % items.length].focus(); event.preventDefault(); }
+  else if (event.key === 'ArrowUp') { items[(index - 1 + items.length) % items.length].focus(); event.preventDefault(); }
+  else if (event.key === 'Escape') { closeMapMenu(); mapCanvas.focus({ preventScroll: true }); event.preventDefault(); event.stopPropagation(); }
+});
+document.addEventListener('pointerdown', (event) => { if (!mapMenu.hidden && !event.target.closest('#mapMenu')) closeMapMenu(); }, true);
+addEventListener('blur', closeMapMenu);
 mapCanvas.addEventListener('dblclick', (event) => {
   if (!mapFeatures?.active) return;
   event.preventDefault();
@@ -2185,8 +2247,8 @@ $('observerTiltRange').addEventListener('input', (event) => {
 for (const button of document.querySelectorAll('.rail-tool[data-tool]')) {
   button.addEventListener('click', () => setTool(button.dataset.tool));
 }
-for (const button of document.querySelectorAll('[data-shape]')) {
-  button.addEventListener('click', () => setTool(button.dataset.shape));
+for (const button of document.querySelectorAll('[data-sculpt]')) {
+  button.addEventListener('click', () => setTool(button.dataset.sculpt));
 }
 $('mapZoomInBtn').addEventListener('click', () => stepMapZoom(1));
 $('mapZoomOutBtn').addEventListener('click', () => stepMapZoom(-1));

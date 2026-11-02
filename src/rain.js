@@ -129,6 +129,7 @@ export function createRainSimulation(api) {
     button.querySelector('span').textContent = active ? 'ניקוי מים' : 'הפעלת גשם';
     document.getElementById('rainPanel').hidden = !active;
     if (message) overlay.textContent = message;
+    if (message || !active) queueMicrotask(() => updateWaterInfo());
   }
 
   // ——— Model → drawable geometry ———
@@ -249,9 +250,13 @@ export function createRainSimulation(api) {
     updateWaterInfo();
   }
 
-  function updateWaterInfo() {
+  // Details live behind the "i" button on the map (wide screens) or below the map (phones).
+  function updateWaterInfo(fresh = false) {
     const box = document.getElementById('waterInfo');
+    const toggle = document.getElementById('waterInfoBtn');
     const parts = [];
+    const status = document.getElementById('rainStatusOverlay').textContent;
+    if (active && status) parts.push(`<div class="info-status">🌧️ ${status}</div>`);
     if (pinned) {
       const base = dropBase();
       const n = base.size;
@@ -276,11 +281,38 @@ export function createRainSimulation(api) {
       }).join('');
       parts.push(`<div><strong>${basinView.basins.length} אגני ניקוז.</strong> הקווים הכהים הם קווי פרשת המים: גשם משני צדי הקו מגיע למקומות שונים.</div><div class="basin-chips">${chips}</div>`);
     }
-    if (dropMode && !pinned) parts.push(`<div>💧 העבירו את העכבר על המפה כדי לראות את מסלול הטיפה, ולחצו כדי לקבע אותו.${raining() ? '' : ' בלי גשם הטיפה נעצרת בשקע הראשון שהיא מגיעה אליו; הפעילו גשם כדי לראות שקעים מתמלאים וגולשים.'}</div>`);
+    if (active && !pinned) parts.push('<div class="rain-legend-inline">כל קו כחול דק הוא טיפה שזורמת במורד התלול ביותר: מכיפה לכל הכיוונים, תמיד בניצב לקווי הגובה.</div>');
     if (pinned) parts.push('<button type="button" class="info-close" id="clearDropBtn">ניקוי הטיפה</button>');
     box.hidden = !parts.length;
-    box.innerHTML = parts.join('');
+    toggle.hidden = !parts.length;
+    if (!parts.length) { box.classList.remove('open'); toggle.setAttribute('aria-expanded', 'false'); }
+    box.innerHTML = parts.join('') + '<button type="button" class="info-dismiss" id="closeWaterInfoBtn" aria-label="סגירת הפירוט">×</button>';
+    document.getElementById('closeWaterInfoBtn').addEventListener('click', () => setInfoOpen(false));
+    if (fresh) {
+      toggle.classList.remove('pulse');
+      void toggle.offsetWidth;
+      toggle.classList.add('pulse');
+    }
     document.getElementById('clearDropBtn')?.addEventListener('click', () => { pinned = null; applyTint(); updateWaterInfo(); updateDrop3D(); clearTrails(); api.redraw(); });
+  }
+
+  // On wide screens the card opens as a popover right under the "i" button.
+  function setInfoOpen(open) {
+    const box = document.getElementById('waterInfo');
+    const toggle = document.getElementById('waterInfoBtn');
+    box.classList.toggle('open', open);
+    toggle.setAttribute('aria-expanded', String(open));
+    const floating = open && toggle.offsetParent !== null; // the toggle is hidden on phones
+    box.classList.toggle('floating', floating);
+    if (floating) {
+      const rect = toggle.getBoundingClientRect();
+      const width = Math.min(360, innerWidth - 24);
+      box.style.width = `${width}px`;
+      box.style.left = `${Math.max(12, rect.right - width)}px`;
+      box.style.top = `${rect.bottom + 8}px`;
+    } else {
+      box.style.width = box.style.left = box.style.top = '';
+    }
   }
 
   function syncToolButtons() {
@@ -388,7 +420,7 @@ export function createRainSimulation(api) {
     pinDrop(snapToStream(cellAt(gx, gy)));
     hover = null;
     applyTint();
-    updateWaterInfo();
+    updateWaterInfo(true);
     updateDrop3D();
     runDryLoop();
     api.redraw();
@@ -1008,6 +1040,9 @@ export function createRainSimulation(api) {
 
   document.getElementById('rainBtn').addEventListener('click', toggle);
   document.getElementById('basinsBtn').addEventListener('click', () => setBasins(!showBasins));
+  document.getElementById('waterInfoBtn').addEventListener('click', () => {
+    setInfoOpen(!document.getElementById('waterInfo').classList.contains('open'));
+  });
   document.getElementById('rainCollapseBtn').addEventListener('click', () => {
     const panel = document.getElementById('rainPanel');
     const collapsed = panel.classList.toggle('collapsed');

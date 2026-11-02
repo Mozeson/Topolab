@@ -152,7 +152,7 @@ body.resizing-panels { user-select: none; cursor: col-resize; }
 .rail-tool svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .rail-tool:hover:not(:disabled) { color: var(--forest); background: #e0e8d8; }
 .rail-tool[aria-pressed='true'] { color: #f7f9ef; background: var(--forest-2); border-color: var(--forest-2); box-shadow: 0 3px 10px rgb(26 73 57 / 18%); }
-#lowerBtn[aria-pressed='true'] { background: var(--lower); border-color: var(--lower); }
+#sculptBtn[aria-pressed='true'][data-mode='lower'] { background: var(--lower); border-color: var(--lower); }
 #featuresBtn[aria-pressed='true'] { background: var(--feature); border-color: var(--feature); }
 .rail-rain { color: #226b8a; }
 .rail-rain[aria-pressed='true'] { color: #f4fcff; background: var(--water); border-color: var(--water); }
@@ -176,7 +176,7 @@ body.resizing-panels { user-select: none; cursor: col-resize; }
 .shape-modes button { min-height: 28px; padding: 0 10px; color: var(--ink-soft); background: transparent; border: 0; border-radius: 7px; font-size: 12px; font-weight: 700; }
 .shape-modes button[aria-checked='true'] { color: #5b3f8c; background: #fffef9; box-shadow: 0 1px 4px rgb(26 51 41 / 14%); }
 .shape-hint { flex-basis: 100%; color: var(--ink-soft); font-size: 11px; }
-#shapeBtn[aria-pressed='true'] { background: #6d58a0; border-color: #6d58a0; }
+#sculptBtn[aria-pressed='true'][data-mode='smudge'], #sculptBtn[aria-pressed='true'][data-mode='pinch'], #sculptBtn[aria-pressed='true'][data-mode='flatten'] { background: #6d58a0; border-color: #6d58a0; }
 .options-hint { margin-inline-start: auto; color: var(--ink-soft); font-size: 11px; white-space: nowrap; }
 
 .feature-options { gap: 6px 10px; }
@@ -805,3 +805,67 @@ body.navigating .scene-panel .scene-viewport { flex: 1 1 auto; min-height: 0; as
   .rail-tool svg { width: 20px; height: 20px; }
   .rail-compact { min-height: 38px; }
 }
+
+/* "עיצוב" rail button: one button for every sculpt tool; the current one is shown under it. */
+.rail-sub { font-size: 9px; font-weight: 600; opacity: .8; }
+.sculpt-modes { padding: 2px; display: inline-flex; flex-wrap: wrap; gap: 2px; background: #e6e9de; border: 1px solid var(--line); border-radius: 9px; }
+.sculpt-modes button { min-height: 28px; padding: 0 9px; color: var(--ink-soft); background: transparent; border: 0; border-radius: 7px; font-size: 12px; font-weight: 700; }
+.sculpt-modes button:hover { color: var(--ink); }
+.sculpt-modes button[aria-checked='true'] { color: var(--forest); background: #fffef9; box-shadow: 0 1px 4px rgb(26 51 41 / 14%); }
+.sculpt-modes button[data-sculpt='lower'][aria-checked='true'] { color: var(--lower); }
+.sculpt-modes button[data-sculpt='smudge'][aria-checked='true'], .sculpt-modes button[data-sculpt='pinch'][aria-checked='true'], .sculpt-modes button[data-sculpt='flatten'][aria-checked='true'] { color: #5b3f8c; }
+.sculpt-modes-gap { width: 1px; margin: 4px 2px; background: var(--line-strong); }
+
+/* Right-click tool menu on the map */
+.map-menu { position: fixed; z-index: 140; min-width: 196px; padding: 5px; display: grid; gap: 1px; color: var(--ink); background: var(--panel); border: 1px solid var(--line-strong); border-radius: 12px; box-shadow: 0 14px 38px rgb(24 51 42 / 26%); direction: rtl; }
+.map-menu button { min-height: 32px; padding: 0 8px; display: grid; grid-template-columns: 22px 1fr auto; align-items: center; gap: 8px; color: var(--ink); background: transparent; border: 0; border-radius: 8px; font-size: 13px; text-align: right; }
+.map-menu button:hover, .map-menu button:focus-visible { background: #e6eddf; outline: 0; }
+.map-menu button[aria-checked='true'] { color: #fff; background: var(--forest-2); }
+.map-menu button[aria-checked='true'] kbd { color: var(--ink); }
+.map-menu svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.map-menu hr { width: 100%; margin: 3px 0; border: 0; border-top: 1px solid var(--line); }
+.map-menu .menu-title { padding: 3px 8px 4px; color: var(--ink-soft); font-size: 11px; font-weight: 700; }
+
+/* ——— Rain gauge beside the map (wide screens) ———
+   The map and the rain panel share a row: while it rains the panel is a slim vertical
+   column on the map's right side (vertical sliders), so it never covers the map.
+   Details (status, basins, a drop) open from the "i" button on the map. */
+.map-row { flex: 1; min-height: 0; display: flex; }
+.map-row > .map-wrap { flex: 1 1 auto; min-width: 0; }
+.water-dock-top { height: auto; flex: 0 0 auto; display: flex; }
+.water-dock-top .rain-panel { position: static; transform: none; width: 86px; margin: 0; padding: 10px 6px; display: flex; flex-direction: column; align-items: center; gap: 10px; overflow-y: auto; background: #edf6fa; border: 0; border-inline-end: 1px solid #c9dfe8; border-radius: 0; box-shadow: none; backdrop-filter: none; }
+.water-dock-top .rain-panel > .rain-amount { display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 10px; text-align: center; }
+.water-dock-top .rain-amount input { width: 26px; height: 150px; writing-mode: vertical-lr; direction: rtl; }
+.water-dock-top .water-opacity input { height: 84px; }
+.water-dock-top .rain-amount output { min-width: 0; font-size: 10px; line-height: 1.3; text-align: center; white-space: normal; }
+.water-dock-top .rain-collapse, .water-dock-top .rain-status, .water-dock-top .rain-legend { display: none; }
+.water-dock-top .rain-tools { flex-direction: column; }
+.water-dock-top .rain-tools button { width: 64px; min-height: 52px; padding: 4px; flex-direction: column; justify-content: center; gap: 2px; border-radius: 12px; font-size: 10px; line-height: 1.15; }
+.water-dock-top .rain-tools svg { width: 20px; height: 20px; }
+
+.water-info-toggle { position: absolute; z-index: 6; top: 14px; right: 14px; width: 30px; height: 30px; padding: 0; display: grid; place-items: center; color: #fff; background: #1f78a8; border: 2px solid #fff; border-radius: 50%; box-shadow: 0 3px 10px rgb(20 70 100 / 35%); font: 700 italic 16px/1 Georgia, 'Times New Roman', serif; }
+.water-info-toggle:hover { background: #155e86; }
+.water-info-toggle[aria-expanded='true'] { color: #1f78a8; background: #fff; border-color: #1f78a8; }
+.water-info-toggle.pulse { animation: info-pulse 1.2s ease-out 2; }
+@keyframes info-pulse { 0% { box-shadow: 0 0 0 0 rgb(31 120 168 / 55%); } 100% { box-shadow: 0 0 0 14px rgb(31 120 168 / 0%); } }
+.water-dock-bottom .water-info:not(.open) { display: none; }
+.water-info .info-dismiss { position: absolute; top: 4px; inset-inline-end: 6px; width: 24px; height: 24px; padding: 0; color: #4d7b93; background: none; border: 0; font-size: 18px; line-height: 1; }
+.water-info { padding-inline-end: 30px; }
+.water-info .info-status { color: #0f4c72; font-weight: 700; }
+
+@media (max-width: 899px), (orientation: portrait) and (max-width: 1024px) {
+  .map-row { flex-direction: column; }
+  .water-dock-top { display: block; }
+  .water-dock-top .rain-panel { width: auto; margin: 6px 8px; padding: 8px 12px; padding-inline-start: 34px; display: grid; gap: 4px; overflow: visible; background: rgb(240 250 254 / 94%); border: 1px solid rgb(43 133 172 / 30%); border-radius: 14px; }
+  .water-dock-top .rain-panel > .rain-amount { display: grid; grid-template-columns: auto auto 1fr; gap: 8px; font-size: 12px; text-align: right; }
+  .water-dock-top .rain-amount input { width: 100%; height: 24px; writing-mode: horizontal-tb; direction: inherit; }
+  .water-dock-top .rain-amount output { grid-column: 1 / -1; }
+  .water-dock-top .rain-collapse { display: block; }
+  .water-dock-top .rain-status { display: block; }
+  .water-dock-top .rain-tools { flex-direction: row; }
+  .water-dock-top .rain-tools button { width: auto; min-height: 30px; padding: 0 12px; flex-direction: row; gap: 6px; border-radius: 15px; font-size: 12px; }
+  .water-info-toggle { display: none; }
+  .water-dock-bottom .water-info:not(.open) { display: grid; }
+  .water-info .info-dismiss { display: none; }
+}
+.water-dock-bottom .water-info.floating { position: fixed; z-index: 60; bottom: auto; transform: none; }
