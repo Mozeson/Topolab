@@ -31,6 +31,7 @@ const BASE_Y = -4.15;
 const plinthScale = () => Math.min(1, WORLD_SIZE / 10);
 const plinthBox = () => new THREE.BoxGeometry(WORLD_SIZE + .12 * plinthScale(), .36 * plinthScale(), WORLD_SIZE + .12 * plinthScale());
 const EYE_HEIGHT_METERS = 1.7;
+const NAV_EYE_HEIGHT_METERS = 2.1; // a little above head height: the game view felt ground-hugging
 const OBSERVER_FOV = 65;
 let heights = new Float32Array(N * N);
 const TOOL_LABELS = { raise: 'הגבהה', lower: 'הנמכה', smooth: 'החלקה', smudge: 'מריחה', pinch: 'צביטה', flatten: 'השטחה', pan: 'הזזת מפה', features: 'תכסית', course: 'מסלול', drop: 'טיפה', waypoint: 'נ״צ' };
@@ -811,7 +812,7 @@ function installContourShader(material) {
       .replace('#include <color_fragment>', `#include <color_fragment>
         if (uDetail > 0.5) {
           vec2 m = vGroundXZ * uWorldToMeters;
-          float n = groundNoise(m / 22.0) * .55 + groundNoise(m / 6.0) * .3 + groundNoise(m / 1.7) * .15;
+          float n = groundNoise(m / 30.0) * .6 + groundNoise(m / 9.0) * .3 + groundNoise(m / 3.5) * .1;
           float patches = smoothstep(.35, .75, groundNoise(m / 90.0 + 7.3));
           diffuseColor.rgb *= .82 + n * .34;
           diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(1.08, 1.02, .82), patches * .35);
@@ -950,7 +951,7 @@ function resizeThree() {
   renderer.setSize(width, height, false);
   camera.aspect = width / height;
   camera.fov = state.observer.firstPerson ? OBSERVER_FOV : camera.aspect < 0.85 ? 52 : 43;
-  camera.near = state.observer.firstPerson ? .003 : .1;
+  camera.near = state.observer.firstPerson ? metersToWorld() * .3 : .1;
   camera.updateProjectionMatrix();
   if (scene) renderer.render(scene, camera);
   needsRender = false;
@@ -1111,11 +1112,14 @@ function updateBrushRing() {
 function updateObserverCamera() {
   const observer = state.observer;
   if (!camera || !observer.placed) return;
-  const groundHeight = sampleHeight(observer.u, observer.v);
+  // The rendered terrain is made of triangles; bilinear sampling can sit metres below them on
+  // a slope, putting the eye "in" the ground. Use the higher of the two.
+  const groundHeight = Math.max(sampleHeight(observer.u, observer.v), surfaceHeight(observer.u, observer.v));
+  const eye = state.navigating ? NAV_EYE_HEIGHT_METERS : EYE_HEIGHT_METERS;
   const verticalScale = metersToWorld() * state.exaggeration;
   camera.position.set(
     (observer.u - .5) * WORLD_SIZE,
-    groundHeight * verticalScale + (EYE_HEIGHT_METERS + (observer.bob || 0)) * metersToWorld(),
+    groundHeight * verticalScale + (eye + (observer.bob || 0)) * metersToWorld(),
     (observer.v - .5) * WORLD_SIZE,
   );
   const heading = observer.heading * Math.PI / 180;
@@ -2703,10 +2707,12 @@ navGame = createNavGame({
   worldSize: () => WORLD_SIZE,
   metersToWorld,
   height: sampleHeight,
+  surfaceHeight,
   verticalScale: () => metersToWorld() * state.exaggeration,
   axes: () => navigation?.frame(),
   groundInfo: (u, v) => mapFeatures?.groundInfo(u, v),
   updateCamera: updateObserverCamera,
+  gridOrigin: () => state.gridOrigin,
   invalidate: () => { needsRender = true; },
   renderMapBase: (ctx, w, h, dpr) => drawPrintBlock(ctx, w, h, dpr, { mapStyle: 'hypsometric', tintOpacity: .4, showGrid: false, showCoordinates: false, showFeatures: true }),
   enter: enterGameMode,

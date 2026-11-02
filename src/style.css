@@ -894,3 +894,7 @@ body.navigating .scene-panel .scene-viewport { flex: 1 1 auto; min-height: 0; as
 .swatch-builtUp, .feature-legend-item.feature-builtUp i { background: repeating-linear-gradient(-45deg, #b9784a 0 1px, transparent 1px 4px), #f0caa0; border-color: #b9784a; }
 .feature-legend-item.feature-naturalForest i, .feature-legend-item.feature-plantedForest i, .feature-legend-item.feature-orchard i,
 .feature-legend-item.feature-vineyard i, .feature-legend-item.feature-field i, .feature-legend-item.feature-builtUp i { width: 18px; height: 11px; border: 1px solid; border-radius: 2px; }
+.nav-grid-list { width: 100%; padding: 8px 10px; display: flex; flex-wrap: wrap; gap: 4px 12px; color: #eaf3ec; background: rgb(255 255 255 / 8%); border-radius: 10px; font-size: 12px; font-variant-numeric: tabular-nums; }
+.nav-grid-list strong { width: 100%; font-size: 11px; color: #c6dccd; }
+.nav-grid-list span { direction: ltr; }
+.nav-grid-list b { display: inline-grid; place-items: center; width: 18px; height: 18px; margin-right: 4px; color: #fff; background: #c2187a; border-radius: 50%; font-size: 10px; }

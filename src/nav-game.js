@@ -7,6 +7,7 @@ import {
   coursePoints, legs, distanceMeters, reachRadiusMeters, baseSpeed, slopeSpeedFactor,
   naismithMinutes, totalScore, courseKey, drawCourse, courseLength, random, COURSE_COLOR,
 } from './course.js';
+import { readCoordinate, formatCoordinate } from './grid-coords.js';
 
 export const NAV_LEVELS = {
   easy: { mapMode: 'always', showPosition: true, showBearing: true, showDistance: true },
@@ -50,6 +51,7 @@ function writeStorage(key, value) {
 }
 
 export function createNavGame(api) {
+  const coordOf = (point) => formatCoordinate(readCoordinate(point.u, point.v, api.extent(), api.gridOrigin ? api.gridOrigin() : undefined));
   const $ = (id) => document.getElementById(id);
   const hud = $('navHud');
   const mapCard = $('navMapCard');
@@ -134,7 +136,8 @@ export function createNavGame(api) {
       `${formatMeters(length)} בקו ישר`,
       `שטח ${api.mapSize()}×${api.mapSize()} ק״מ`,
       `בשטח אמיתי: כ־${Math.round(naismithMinutes(length * 1.25, 0))} דק׳ הליכה`,
-    ].map((t) => `<span>${t}</span>`).join('');
+    ].map((t) => `<span>${t}</span>`).join('')
+      + `<div class="nav-grid-list"><strong>נ״צ הנקודות (צפון/מזרח):</strong>${points.filter((p) => p.kind === 'control').map((p) => `<span><b>${p.number}</b> ${coordOf(p)}</span>`).join('')}</div>`;
     syncCustomControls();
     updateBest();
     setupDialog.showModal();
@@ -172,8 +175,33 @@ export function createNavGame(api) {
     if (mapBase) ctx.drawImage(mapBase, 0, 0, w, h);
     if (track?.length > 1) drawTrack(ctx, track, w, h, dpr);
     drawCourse(ctx, course, { width: w, height: h, dpr, done, nextIndex, scale: w > 500 * dpr ? 1.2 : 1 });
+    drawGridRefs(ctx, w, h, dpr, done);
     drawNorthArrow(ctx, w, dpr);
     if (showYou) drawYou(ctx, w, h, dpr);
+  }
+
+  // Each control's grid reference (נ״צ), under its number — what the note in the cairn says.
+  function drawGridRefs(ctx, w, h, dpr, done) {
+    const small = w < 420 * dpr;
+    ctx.save();
+    ctx.font = `700 ${(small ? 8 : 10) * dpr}px Arial, sans-serif`;
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'left';
+    points.forEach((point, index) => {
+      if (point.kind !== 'control') return;
+      const text = coordOf(point);
+      const r = Math.min(w, h) * .022;
+      let x = point.u * w + r * 1.25;
+      const y = point.v * h + r * 1.35;
+      const width = ctx.measureText(text).width + 6 * dpr;
+      if (x + width > w - 4 * dpr) x = point.u * w - r * 1.25 - width;
+      ctx.globalAlpha = index < done ? .45 : 1;
+      ctx.fillStyle = 'rgba(255,255,255,.88)';
+      ctx.fillRect(x, y - 6.5 * dpr, width, 13 * dpr);
+      ctx.fillStyle = '#7a1150';
+      ctx.fillText(text, x + 3 * dpr, y + .5 * dpr);
+    });
+    ctx.restore();
   }
 
   function drawNorthArrow(ctx, w, dpr) {
@@ -256,6 +284,64 @@ export function createNavGame(api) {
     return texture;
   }
 
+  // The note wedged in the cairn: the control number and its grid reference.
+  function makeNoteTexture(point) {
+    const canvas = document.createElement('canvas');
+    canvas.width = 256;
+    canvas.height = 160;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#fbf8ee';
+    ctx.fillRect(0, 0, 256, 160);
+    ctx.strokeStyle = 'rgba(80,110,160,.25)';
+    for (let y = 46; y < 160; y += 22) { ctx.beginPath(); ctx.moveTo(10, y); ctx.lineTo(246, y); ctx.stroke(); }
+    ctx.fillStyle = '#c2187a';
+    ctx.font = '700 54px Heebo, Arial, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(String(point.number), 128, 64);
+    ctx.fillStyle = '#26323b';
+    ctx.font = '700 30px Arial, sans-serif';
+    ctx.fillText(coordOf(point), 128, 122);
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    return texture;
+  }
+
+  // רוג׳ום: a small pile of irregular stones with a note sticking out of the top.
+  // Size: a real cairn is ~1 m; it grows a little on big maps so it can be found.
+  function makeCairn(point, index, size) {
+    const group = new THREE.Group();
+    const rand = random(0xc0ffee + index * 7919);
+    const rockGeometry = new THREE.DodecahedronGeometry(1, 0);
+    const materials = [];
+    // The top layer has two stones either side, leaving a gap the note stands in.
+    const layers = [[6, .62, .0], [4, .44, .34], [2, .3, .62]];
+    for (const [count, radius, height] of layers) {
+      for (let k = 0; k < count; k++) {
+        const angle = (k / count) * Math.PI * 2 + rand() * .6;
+        const spread = count === 1 ? 0 : radius * .55;
+        const shade = .5 + rand() * .22;
+        const material = new THREE.MeshStandardMaterial({ color: new THREE.Color(shade * 1.04, shade, shade * .9), roughness: .95, flatShading: true });
+        materials.push(material);
+        const rock = new THREE.Mesh(rockGeometry, material);
+        const r = radius * (.35 + rand() * .2);
+        rock.scale.set(r * (1 + rand() * .4), r * (.7 + rand() * .3), r * (1 + rand() * .4));
+        rock.rotation.set(rand() * 3, rand() * 3, rand() * 3);
+        rock.position.set(Math.cos(angle) * spread, height + r * .55, Math.sin(angle) * spread);
+        rock.castShadow = true;
+        group.add(rock);
+      }
+    }
+    const noteTexture = makeNoteTexture(point);
+    const noteMaterial = new THREE.MeshStandardMaterial({ map: noteTexture, emissiveMap: noteTexture, emissive: 0xffffff, emissiveIntensity: .35, side: THREE.DoubleSide, roughness: .8 });
+    materials.push(noteMaterial);
+    const note = new THREE.Mesh(new THREE.PlaneGeometry(.56, .35), noteMaterial);
+    note.position.set(0, .96, 0); // bottom edge wedged between the top stones
+    note.rotation.set(-.12, rand() * Math.PI * 2, .08);
+    group.add(note);
+    group.scale.setScalar(size);
+    return { group, materials, note, textures: [noteTexture], geometries: [rockGeometry, note.geometry] };
+  }
+
   function buildWorld() {
     const scene = api.scene();
     if (!scene) return null;
@@ -265,7 +351,9 @@ export function createNavGame(api) {
     const mtw = api.metersToWorld();
     const W = api.worldSize();
     const vs = api.verticalScale();
-    const flagM = Math.max(4, extent * .0022); // exaggerated "symbol" size, like the sheep
+    const flagM = Math.max(4, extent * .0022); // start/finish flags: exaggerated "symbol" size
+    const cairnM = Math.max(1.6, extent * .0008); // cairn height in metres (≈3 m on a 4 km map)
+    const extras = { textures: [], geometries: [] };
     const orange = makeKiteTexture('#f26a21');
     const magenta = makeKiteTexture(COURSE_COLOR);
     const flags = [];
@@ -274,6 +362,17 @@ export function createNavGame(api) {
     points.forEach((point, index) => {
       if (index === 0 && !points.at(-1).implicit) return; // start without a finish flag of its own
       if (point.kind === 'finish' && point.implicit) return; // shared with the start flag
+      if (point.kind === 'control') {
+        const cairn = makeCairn(point, index, cairnM);
+        cairn.group.scale.multiplyScalar(mtw);
+        cairn.group.position.set((point.u - .5) * W, (api.surfaceHeight ? api.surfaceHeight(point.u, point.v) : api.height(point.u, point.v)) * vs, (point.v - .5) * W);
+        cairn.group.userData = { index, materials: cairn.materials, kite: cairn.note, cairn: true };
+        extras.textures.push(...cairn.textures);
+        extras.geometries.push(...cairn.geometries);
+        group.add(cairn.group);
+        flags.push(cairn.group);
+        return;
+      }
       const texture = point.kind === 'control' ? orange : magenta;
       const kiteMaterial = new THREE.MeshStandardMaterial({ map: texture, emissiveMap: texture, emissive: 0xffffff, emissiveIntensity: .18, side: THREE.DoubleSide, transparent: true, roughness: .55 });
       const poleMaterial = new THREE.MeshStandardMaterial({ color: 0xe8e6dc, transparent: true, roughness: .4, metalness: .2 });
@@ -358,7 +457,7 @@ export function createNavGame(api) {
     group.add(shrubs, trees);
 
     scene.add(group);
-    return { group, flags, sky, textures: [orange, magenta] };
+    return { group, flags, sky, textures: [orange, magenta, ...extras.textures] };
   }
 
   function disposeWorld() {
@@ -384,8 +483,22 @@ export function createNavGame(api) {
       const opacity = clamp((visible - d) / (visible * .35), 0, 1);
       flag.visible = opacity > .01;
       const punched = flag.userData.index < run.next && flag.userData.index !== 0;
-      for (const material of flag.userData.materials) material.opacity = opacity * (punched ? .45 : 1);
-      flag.userData.kite.rotation.y += .004;
+      const alpha = opacity * (punched ? .45 : 1);
+      for (const material of flag.userData.materials) {
+        // Only blend while fading: permanently transparent stones look ghostly.
+        const transparent = alpha < .99;
+        if (material.transparent !== transparent) { material.transparent = transparent; material.needsUpdate = true; }
+        material.opacity = alpha;
+      }
+      if (!flag.userData.cairn) flag.userData.kite.rotation.y += .004;
+      else {
+        // The note turns towards the walker so it can always be read.
+        const camera = api.camera();
+        const note = flag.userData.kite;
+        const dx = camera.position.x - flag.position.x;
+        const dz = camera.position.z - flag.position.z;
+        note.rotation.set(-.12, Math.atan2(dx, dz), .06);
+      }
     }
   }
 
@@ -647,7 +760,7 @@ export function createNavGame(api) {
       return;
     }
     beep([[988, .09], [1319, .16]]);
-    flash(`✓ נקודה ${point.number}`);
+    flash(`✓ נקודה ${point.number} · מצאתם את הפתק`);
   }
 
   function checkControls() {
