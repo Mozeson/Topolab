@@ -32,7 +32,7 @@ const plinthBox = () => new THREE.BoxGeometry(WORLD_SIZE + .12 * plinthScale(), 
 const EYE_HEIGHT_METERS = 1.7;
 const OBSERVER_FOV = 65;
 let heights = new Float32Array(N * N);
-const TOOL_LABELS = { raise: 'הגבהה', lower: 'הנמכה', smooth: 'החלקה', smudge: 'מריחה', pinch: 'צביטה', flatten: 'השטחה', pan: 'הזזת מפה', features: 'תכסית', course: 'מסלול' };
+const TOOL_LABELS = { raise: 'הגבהה', lower: 'הנמכה', smooth: 'החלקה', smudge: 'מריחה', pinch: 'צביטה', flatten: 'השטחה', pan: 'הזזת מפה', features: 'תכסית', course: 'מסלול', drop: 'טיפה' };
 const SHAPE_HINTS = {
   smudge: 'גררו: השטח נמרח בכיוון התנועה — מאריכים שלוחה, מזיזים פסגה',
   pinch: 'החזיקו על גיא כדי להצר אותו, על רכס כדי לחדד · Alt: הרחבה ומריחת כיפה',
@@ -1325,6 +1325,7 @@ function updateReadouts() {
 }
 
 function scheduleUpdate() {
+  rainSimulation?.terrainChanged?.();
   if (updateQueued) return;
   updateQueued = true;
   updateReadouts();
@@ -1398,7 +1399,7 @@ function setTool(tool) {
   const previous = state.tool;
   state.tool = tool;
   if (tool !== 'features' && previous === 'features') mapFeatures?.cancel(true);
-  if (tool === 'pan' || tool === 'features' || tool === 'course') {
+  if (tool === 'pan' || tool === 'features' || tool === 'course' || tool === 'drop') {
     state.observer.placing = false;
     sheepGame?.cancelPlacement?.();
     updateObserverUI();
@@ -1418,6 +1419,8 @@ function syncToolUI() {
   $('panOptions').hidden = tool !== 'pan';
   $('featureOptions').hidden = tool !== 'features';
   $('courseOptions').hidden = tool !== 'course';
+  $('dropOptions').hidden = tool !== 'drop';
+  rainSimulation?.setDropMode(tool === 'drop');
   if (tool === 'course') updateCourseUI();
   const label = $('toolMode');
   label.textContent = TOOL_LABELS[tool];
@@ -1808,9 +1811,9 @@ mapCanvas.addEventListener('pointerdown', (event) => {
   event.preventDefault();
   mapCanvas.focus({ preventScroll: true });
   const next = eventToGrid(event);
-  // The rain panel's drop tool takes clicks while it is on.
-  if (rainSimulation?.dropMode) {
-    rainSimulation.handleMapClick(next.gx, next.gy);
+  // The drop tool: show where water from this point goes (works with or without rain).
+  if (state.tool === 'drop') {
+    rainSimulation?.handleMapClick(next.gx, next.gy);
     return;
   }
   if (state.tool === 'course') {
@@ -1884,8 +1887,8 @@ mapCanvas.addEventListener('pointermove', (event) => {
     return;
   }
   updatePointReadout(next, event);
-  if (rainSimulation?.dropMode) {
-    rainSimulation.handleMapHover(next.gx, next.gy);
+  if (state.tool === 'drop') {
+    rainSimulation?.handleMapHover(next.gx, next.gy);
     return;
   }
   if (courseDrag) {
@@ -2489,6 +2492,7 @@ initShortcuts({
   'tool-pan': () => setTool('pan'),
   'tool-features': () => setTool('features'),
   'tool-course': () => setTool('course'),
+  'tool-drop': () => setTool('drop'),
   'open-navigation': () => openNavigation(),
   'toggle-topo': () => setTopo(!state.topo),
   'toggle-rain': () => rainSimulation?.toggle(),

@@ -780,3 +780,28 @@ body.navigating .scene-panel .scene-viewport { flex: 1 1 auto; min-height: 0; as
 @media (max-width: 480px) {
   .nav-levels, .nav-result-grid { grid-template-columns: 1fr 1fr; }
 }
+
+/* Water panels live in docks just outside the map: over the map on wide screens, in the
+   page flow (above / below the map) in the stacked phone layout so they never hide it. */
+.water-dock { position: relative; z-index: 7; height: 0; }
+.water-dock-top .rain-panel { top: 44px; }
+.water-dock-bottom .water-info { bottom: 14px; }
+.rail-drop { color: #1f6e9c; }
+#dropBtn[aria-pressed='true'] { color: #fff; background: #1f78a8; border-color: #1f78a8; }
+.options-tool.drop { color: #155a85; background: #dceef7; }
+#dropOptions .drop-hint { display: block; margin-inline-start: 0; white-space: normal; font-size: 11px; }
+.water-opacity svg { stroke: #1f78a8; }
+@media (max-width: 899px), (orientation: portrait) and (max-width: 1024px) {
+  .water-dock { height: auto; }
+  .water-dock-top .rain-panel, .water-dock-bottom .water-info { position: static; transform: none; width: auto; margin: 6px 8px; box-shadow: none; }
+  .rain-amount { grid-template-columns: auto auto 1fr; }
+  .rain-amount output { grid-column: 1 / -1; min-width: 0; text-align: center; }
+  .rain-legend { display: none; }
+}
+@media (max-height: 820px) and (min-width: 900px) {
+  .tool-rail { gap: 5px; padding-block: 6px; }
+  .rail-group { gap: 2px; padding-bottom: 5px; }
+  .rail-tool { min-height: 44px; padding-block: 3px; }
+  .rail-tool svg { width: 20px; height: 20px; }
+  .rail-compact { min-height: 38px; }
+}

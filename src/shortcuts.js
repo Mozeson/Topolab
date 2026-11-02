@@ -14,6 +14,7 @@ export const SHORTCUTS = [
   { id: 'tool-pan', codes: ['KeyH'], label: 'H', description: 'הזזת המפה' },
   { id: 'tool-features', codes: ['KeyF'], label: 'F', description: 'ציור תכסית' },
   { id: 'tool-course', codes: ['KeyC'], label: 'C', description: 'תכנון מסלול ניווט' },
+  { id: 'tool-drop', codes: ['KeyD'], label: 'D', description: 'טיפה: לאן זורמים המים מנקודה' },
   { id: 'open-navigation', codes: ['KeyG'], label: 'G', description: 'יציאה לניווט' },
   { id: 'toggle-topo', codes: ['KeyT'], label: 'T', description: 'מעבר בין פיסול למפה טופוגרפית' },
   { id: 'toggle-rain', codes: ['KeyW'], label: 'W', description: 'הפעלה וניקוי של גשם' },

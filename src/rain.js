@@ -6,7 +6,7 @@
 //                lakes fill from their deepest point up to their spill level;
 //   'flowing'  — the steady state: streams keep flowing (scrolling texture) until cleared.
 // See docs/RAIN.md.
-import { analyzeTerrain, simulateRain, drainageBasins, tracePath, upstreamArea } from './hydrology.js';
+import { analyzeTerrain, simulateRain, drainageBasins, tracePath, upstreamArea, dryFlow, traceDryPath } from './hydrology.js';
 import { createRunoff } from './runoff.js';
 import { contours } from 'd3-contour';
 import * as THREE from 'three';
@@ -15,6 +15,7 @@ const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 const RAIN_SECONDS = 3.2;      // how long the growth animation takes
 const STREAK_COUNT = 1400;
 const RAIN_KEY = 'topolab-rain-amount';
+const OPACITY_KEY = 'topolab-water-opacity';
 const BASIN_COLORS = ['#e39b4f', '#6fae5c', '#c56f98', '#4fa59b', '#d1bd45', '#8f7cc4', '#de7465', '#5c93cf', '#b08758', '#7fbfa2', '#c9a0d8', '#9fb34a'];
 const CATCHMENT_COLOR = '#27a3d6';
 const SIDE_NAMES = { north: 'צפון', south: 'דרום', east: 'מזרח', west: 'מערב' };
@@ -107,6 +108,9 @@ export function createRainSimulation(api) {
   let dropMode = false;
   let hover = null;      // drop path preview under the pointer
   let pinned = null;     // clicked drop: { cell, path, catchment, shape, t }
+  let dry = null;        // drop analysis without rain (lazy; dropped when the terrain changes)
+  let waterOpacity = .6; // "בולטות המים" — scales every water layer
+  let dryFrame = 0;
   // Trails are painted on their own canvas layered over the map, so the terrain is not
   // redrawn every frame; old trail pixels fade a little each frame.
   const trailCanvas = document.createElement('canvas');
@@ -161,9 +165,17 @@ export function createRainSimulation(api) {
   }
 
   // ——— Water analysis: basins and drops ———
+  // The drop tool works with or without rain: during rain it follows the rain model (full
+  // lakes overflow); otherwise it follows the real ground and stops in the first pit.
+  const raining = () => active && Boolean(model);
+  function dropBase() {
+    if (raining()) return model;
+    if (!dry) dry = dryFlow(api.gridSize(), api.heights());
+    return dry;
+  }
   function cellMeters() {
     const extent = api.extent ? api.extent() : 4000;
-    return extent / (model.size - 1);
+    return extent / (dropBase().size - 1);
   }
 
   function formatArea(cells) {
@@ -174,14 +186,14 @@ export function createRainSimulation(api) {
   }
 
   function maskShape(mask) {
-    const n = model.size;
+    const n = dropBase().size;
     const grid = new Float64Array(n * n);
     for (let i = 0; i < n * n; i++) grid[i] = mask(i) ? 1 : 0;
     return contours().size([n, n]).smooth(true).thresholds([.5])(grid)[0];
   }
 
   function pathPoints(cells) {
-    const n = model.size;
+    const n = dropBase().size;
     return smooth(cells.map((i) => ({ u: (i % n) / (n - 1), v: Math.floor(i / n) / (n - 1), flow: 1 })), 2);
   }
 
@@ -191,6 +203,7 @@ export function createRainSimulation(api) {
       return `נעצרת באגם (עומק ${Math.max(1, Math.round(lake.wetDepth))} מ׳) — אגן סגור`;
     }
     if (end.type === 'edge') return `יוצאת מהמפה ב${sideName(end.side)}`;
+    if (end.type === 'pit') return 'נעצרת בשקע — הנקודה הנמוכה ביותר בסביבתה';
     return 'נעצרת בשטח שטוח';
   }
 
@@ -200,17 +213,21 @@ export function createRainSimulation(api) {
     basinView = { basinOf, basins, shapes };
   }
 
+  function tracePoint(cell) {
+    return raining() ? tracePath(model, model, cell) : traceDryPath(dropBase(), cell);
+  }
+
   function pinDrop(cell) {
-    const path = tracePath(model, model, cell);
-    const catchment = upstreamArea(model, cell);
+    const path = tracePoint(cell);
+    const catchment = upstreamArea(dropBase(), cell);
     pinned = { cell, path, points: pathPoints(path.cells), catchment, shape: catchment.cells > 3 ? maskShape((i) => catchment.mask[i]) : null, t: 0 };
   }
 
   // Terrain overlay in 3D: the clicked drop's catchment wins over the basin colours.
   function applyTint() {
     if (!api.setTerrainTint) return;
-    if (!active || (!pinned && !showBasins)) { api.setTerrainTint(null); return; }
-    const n = model.size;
+    if (!pinned && !(active && showBasins)) { api.setTerrainTint(null); return; }
+    const n = dropBase().size;
     const tint = new Float32Array(n * n * 4);
     if (pinned) {
       const [r, g, b] = hexToRgb(CATCHMENT_COLOR);
@@ -226,8 +243,7 @@ export function createRainSimulation(api) {
   }
 
   function refreshWaterTools() {
-    if (!active || !model) return;
-    if (showBasins) computeBasins(); else basinView = null;
+    if (active && model && showBasins) computeBasins(); else basinView = null;
     if (pinned) pinDrop(pinned.cell);
     applyTint();
     updateWaterInfo();
@@ -237,7 +253,8 @@ export function createRainSimulation(api) {
     const box = document.getElementById('waterInfo');
     const parts = [];
     if (pinned) {
-      const n = model.size;
+      const base = dropBase();
+      const n = base.size;
       const start = pinned.path.cells[0];
       const last = pinned.path.cells[pinned.path.cells.length - 1];
       let length = 0;
@@ -247,28 +264,28 @@ export function createRainSimulation(api) {
         length += Math.hypot(a % n - b % n, Math.floor(a / n) - Math.floor(b / n));
       }
       const meters = length * cellMeters();
-      const drop = model.heights[start] - model.heights[last];
-      parts.push(`<div>💧 <strong>מהנקודה (גובה ${Math.round(model.heights[start])} מ׳)</strong> הטיפה עוברת ${meters >= 1000 ? `${(meters / 1000).toFixed(2)} ק״מ` : `${Math.round(meters)} מ׳`}, יורדת ${Math.max(0, Math.round(drop))} מ׳ ו${endText(pinned.path.end)}.</div>`);
+      const drop = base.heights[start] - base.heights[last];
+      const context = raining() ? '' : ' <span style="color:#5d7d8c">(בלי גשם)</span>';
+      parts.push(`<div>💧 <strong>מהנקודה (גובה ${Math.round(base.heights[start])} מ׳)</strong>${context} הטיפה עוברת ${meters >= 1000 ? `${(meters / 1000).toFixed(2)} ק״מ` : `${Math.round(meters)} מ׳`}, יורדת ${Math.max(0, Math.round(drop))} מ׳ ו${endText(pinned.path.end)}.</div>`);
       parts.push(`<div><i style="display:inline-block;width:10px;height:10px;border-radius:3px;background:${CATCHMENT_COLOR};opacity:.8"></i> <strong>אגן ההיקוות של הנקודה:</strong> ${formatArea(pinned.catchment.cells)} — כל הגשם שיורד בשטח המסומן עובר כאן.</div>`);
     }
-    if (showBasins && basinView && !pinned) {
+    if (active && showBasins && basinView && !pinned) {
       const chips = basinView.basins.map((basin) => {
         const where = basin.destination.type === 'lake' ? 'אגם (אגן סגור)' : sideName(basin.destination.side);
         return `<span><i style="background:${BASIN_COLORS[basin.id % BASIN_COLORS.length]}"></i>${Math.round(basin.share * 100)}% → ${where}</span>`;
       }).join('');
       parts.push(`<div><strong>${basinView.basins.length} אגני ניקוז.</strong> הקווים הכהים הם קווי פרשת המים: גשם משני צדי הקו מגיע למקומות שונים.</div><div class="basin-chips">${chips}</div>`);
     }
-    if (dropMode && !pinned) parts.push('<div>העבירו את העכבר על המפה כדי לראות את מסלול הטיפה, ולחצו כדי לקבע אותו.</div>');
+    if (dropMode && !pinned) parts.push(`<div>💧 העבירו את העכבר על המפה כדי לראות את מסלול הטיפה, ולחצו כדי לקבע אותו.${raining() ? '' : ' בלי גשם הטיפה נעצרת בשקע הראשון שהיא מגיעה אליו; הפעילו גשם כדי לראות שקעים מתמלאים וגולשים.'}</div>`);
     if (pinned) parts.push('<button type="button" class="info-close" id="clearDropBtn">ניקוי הטיפה</button>');
     box.hidden = !parts.length;
     box.innerHTML = parts.join('');
-    document.getElementById('clearDropBtn')?.addEventListener('click', () => { pinned = null; refreshWaterTools(); api.redraw(); });
+    document.getElementById('clearDropBtn')?.addEventListener('click', () => { pinned = null; applyTint(); updateWaterInfo(); updateDrop3D(); clearTrails(); api.redraw(); });
   }
 
   function syncToolButtons() {
     document.getElementById('basinsBtn').setAttribute('aria-pressed', String(showBasins));
-    document.getElementById('dropToolBtn').setAttribute('aria-pressed', String(dropMode));
-    api.setDropCursor?.(dropMode && active);
+    api.setDropCursor?.(dropMode);
   }
 
   function collapsePanel(collapsed) {
@@ -284,31 +301,72 @@ export function createRainSimulation(api) {
     api.redraw();
   }
 
+  // Called by scene.js when the "טיפה" rail tool is picked or left.
   function setDropMode(on) {
+    if (dropMode === on) return;
     dropMode = on;
-    if (on) collapsePanel(true);
+    if (on && active) collapsePanel(true);
     hover = null;
     if (!on) pinned = null;
     syncToolButtons();
     refreshWaterTools();
+    updateDrop3D();
+    if (!active) clearTrails();
+    runDryLoop();
     api.redraw();
   }
 
+  // Terrain was edited: the dry analysis is stale; a pinned dry drop is recomputed.
+  function terrainChanged() {
+    dry = null;
+    if (!active && pinned) {
+      pinDrop(pinned.cell);
+      applyTint();
+      updateWaterInfo();
+      updateDrop3D();
+    }
+  }
+
+  // Without rain the rain loop is off, so the pinned droplet gets its own animation.
+  function runDryLoop() {
+    cancelAnimationFrame(dryFrame);
+    if (active || !dropMode || !pinned) return;
+    let last = 0;
+    const loop = (now) => {
+      if (active || !dropMode || !pinned) return;
+      const dt = last ? Math.min((now - last) / 1000, .08) : 0;
+      last = now;
+      advancePinned(dt);
+      clearTrails();
+      paintPinnedDroplet();
+      dryFrame = requestAnimationFrame(loop);
+    };
+    dryFrame = requestAnimationFrame(loop);
+  }
+
+  function advancePinned(dt) {
+    if (!pinned || dt <= 0) return;
+    pinned.t += dt * 9; // path points per second
+    if (pinned.t > pinned.points.length - 1 + 12) pinned.t = 0; // pause at the end, then again
+    updateDrop3D();
+  }
+
   function cellAt(gx, gy) {
-    const n = model.size;
+    const n = dropBase().size;
     return Math.round(Math.max(0, Math.min(n - 1, gy))) * n + Math.round(Math.max(0, Math.min(n - 1, gx)));
   }
 
   function handleMapHover(gx, gy) {
-    if (!dropMode || !model) return;
+    if (!dropMode) return;
     const cell = cellAt(gx, gy);
     if (hover?.cell === cell) return;
-    hover = { cell, points: pathPoints(tracePath(model, model, cell).cells) };
+    hover = { cell, points: pathPoints(tracePoint(cell).cells) };
     api.redraw();
   }
 
   // Clicks near a stream snap onto it (students aim at the blue line, not beside it).
   function snapToStream(cell) {
+    if (!raining()) return cell; // no streams without rain
     const n = model.size;
     const x0 = cell % n;
     const y0 = Math.floor(cell / n);
@@ -326,17 +384,19 @@ export function createRainSimulation(api) {
   }
 
   function handleMapClick(gx, gy) {
-    if (!dropMode || !model) return;
+    if (!dropMode) return;
     pinDrop(snapToStream(cellAt(gx, gy)));
     hover = null;
     applyTint();
     updateWaterInfo();
+    updateDrop3D();
+    runDryLoop();
     api.redraw();
   }
 
   function drawShape(ctx, shape, w, h, fill, stroke, lineWidth) {
     if (!shape) return;
-    const n = model.size;
+    const n = dropBase().size;
     ctx.save();
     ctx.scale(w / n, h / n);
     ctx.beginPath();
@@ -387,10 +447,19 @@ export function createRainSimulation(api) {
   }
 
   // ——— 2D map overlay ———
+  function drawDropOverlays(ctx, w, h, dpr) {
+    if (pinned?.shape) drawShape(ctx, pinned.shape, w, h, 'rgba(39,163,214,.36)', 'rgba(10,94,150,.95)', 2.6 * dpr);
+    if (hover) drawPath(ctx, hover.points, w, h, dpr, true);
+    if (pinned) drawPath(ctx, pinned.points, w, h, dpr, false);
+  }
+
   function draw2D(ctx, canvas, dpr) {
-    if (!active || !model) return;
     const w = canvas.width;
     const h = canvas.height;
+    if (!active || !model) {
+      if (dropMode) drawDropOverlays(ctx, w, h, dpr);
+      return;
+    }
     const n = model.size;
     const p = phase === 'raining' ? growth : 1;
     ctx.save();
@@ -399,7 +468,8 @@ export function createRainSimulation(api) {
       // Divides: the outlines of the basins, dark and thick.
       basinView.shapes.forEach((shape) => drawShape(ctx, shape, w, h, null, 'rgba(40,30,20,.75)', 2.6 * dpr));
     }
-    if (pinned?.shape) drawShape(ctx, pinned.shape, w, h, 'rgba(39,163,214,.42)', 'rgba(10,94,150,.95)', 2.6 * dpr);
+    // Water layers (lakes, streams, outlets) follow the "בולטות המים" control.
+    ctx.globalAlpha = waterOpacity;
     // Lakes: shallow and deep shading, filling in as the rain falls.
     const sx = w / n;
     const sy = h / n;
@@ -475,8 +545,8 @@ export function createRainSimulation(api) {
         ctx.restore();
       }
     }
-    if (hover) drawPath(ctx, hover.points, w, h, dpr, true);
-    if (pinned) drawPath(ctx, pinned.points, w, h, dpr, false);
+    ctx.globalAlpha = 1;
+    drawDropOverlays(ctx, w, h, dpr);
     // Rain drops while it is raining.
     if (phase === 'raining') {
       const t = performance.now() / 1000;
@@ -619,7 +689,7 @@ export function createRainSimulation(api) {
     group.add(dropLines);
 
     scene.add(group);
-    return { group, streaks, drops, dropLines, ribbons, lakeMeshes, vs, materials: [streamMaterial, lakeMaterial, streaks.material, dropLines.material] };
+    return { group, streaks, drops, dropLines, ribbons, lakeMeshes, vs, streamMaterial, lakeMaterial, materials: [streamMaterial, lakeMaterial, streaks.material, dropLines.material] };
   }
 
   function disposeWorld() {
@@ -685,6 +755,10 @@ export function createRainSimulation(api) {
       world.dropLines.geometry.setDrawRange(0, k / 3);
       world.dropLines.geometry.attributes.position.needsUpdate = true;
     }
+    world.streamMaterial.opacity = .95 * waterOpacity;
+    world.lakeMaterial.opacity = .86 * waterOpacity;
+    world.lakeMaterial.transparent = true;
+    world.dropLines.material.opacity = .95 * Math.max(.35, waterOpacity);
     if (flowTexture) flowTexture.offset.x -= dt * .9;
     api.invalidate();
   }
@@ -774,7 +848,20 @@ export function createRainSimulation(api) {
       trailCtx.lineTo(p.x / (n - 1) * w, p.y / (n - 1) * h);
     }
     trailCtx.stroke();
-    if (pinned?.points.length > 1) {
+    paintPinnedDroplet();
+  }
+
+  function paintPinnedDroplet() {
+    const mapCanvas = document.getElementById('mapCanvas');
+    if (!mapCanvas || !pinned) return;
+    if (trailCanvas.width !== mapCanvas.width || trailCanvas.height !== mapCanvas.height) {
+      trailCanvas.width = mapCanvas.width;
+      trailCanvas.height = mapCanvas.height;
+    }
+    const w = trailCanvas.width;
+    const h = trailCanvas.height;
+    const dpr = w / Math.max(1, mapCanvas.getBoundingClientRect().width || w);
+    if (pinned.points.length > 1) {
       const pts = pinned.points;
       const k = Math.min(pts.length - 1, Math.floor(pinned.t));
       const f = pinned.t - k;
@@ -813,11 +900,7 @@ export function createRainSimulation(api) {
         api.redraw();
       }
     }
-    if (pinned && dt > 0) {
-      pinned.t += dt * 9; // path points per second
-      if (pinned.t > pinned.points.length - 1 + 12) pinned.t = 0; // pause at the end, then again
-      updateDrop3D();
-    }
+    advancePinned(dt);
     if (runoff && dt > 0) {
       // Small fixed sub-steps keep trails smooth even when a frame is slow.
       const steps = Math.ceil(dt / .03);
@@ -867,6 +950,7 @@ export function createRainSimulation(api) {
     active = true;
     simulate();
     syncToolButtons();
+    collapsePanel(dropMode || showBasins); // keep the map clear while a water tool is on
     phase = 'raining';
     growth = 0;
     lastTime = 0;
@@ -887,12 +971,12 @@ export function createRainSimulation(api) {
     pinned = null;
     hover = null;
     basinView = null;
-    updateDrop3D();
-    api.setTerrainTint?.(null);
-    document.getElementById('waterInfo').hidden = true;
-    syncToolButtons();
     base = null;
     model = null;
+    updateDrop3D();
+    api.setTerrainTint?.(null);
+    updateWaterInfo(); // the drop tool keeps working without rain
+    syncToolButtons();
     paths = [];
     lakeShapes = [];
     updateUI();
@@ -931,7 +1015,20 @@ export function createRainSimulation(api) {
     button.setAttribute('aria-expanded', String(!collapsed));
     button.setAttribute('aria-label', collapsed ? 'הגדלת חלונית הגשם' : 'הקטנת חלונית הגשם');
   });
-  document.getElementById('dropToolBtn').addEventListener('click', () => setDropMode(!dropMode));
+  const opacitySlider = document.getElementById('waterOpacity');
+  const applyOpacity = () => {
+    waterOpacity = Number(opacitySlider.value) / 100;
+    document.getElementById('waterOpacityValue').value = `${opacitySlider.value}%`;
+    trailCanvas.style.opacity = String(Math.max(.35, waterOpacity));
+  };
+  try { const saved = localStorage.getItem(OPACITY_KEY); if (saved !== null) opacitySlider.value = saved; } catch { /* storage unavailable */ }
+  applyOpacity();
+  opacitySlider.addEventListener('input', () => {
+    applyOpacity();
+    try { localStorage.setItem(OPACITY_KEY, opacitySlider.value); } catch { /* storage unavailable */ }
+    update3D(0);
+    api.redraw();
+  });
   const slider = document.getElementById('rainAmount');
   try { const saved = localStorage.getItem(RAIN_KEY); if (saved !== null) slider.value = saved; } catch { /* storage unavailable */ }
   slider.addEventListener('input', onAmountInput);
@@ -940,8 +1037,8 @@ export function createRainSimulation(api) {
 
   // Kept for API compatibility with scene.js (terrain changes stop the rain).
   return {
-    start, stop, toggle, draw2D, update3D: () => update3D(0), stats, handleMapClick, handleMapHover,
+    start, stop, toggle, draw2D, update3D: () => update3D(0), stats, handleMapClick, handleMapHover, setDropMode, terrainChanged,
     get active() { return active; },
-    get dropMode() { return active && dropMode; },
+    get dropMode() { return dropMode; },
   };
 }

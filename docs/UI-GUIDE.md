@@ -46,6 +46,7 @@
 | עיצוב | `shapeBtn` | `smudge` / `pinch` / `flatten` | M / P / E | כפתור אחד לשלושה כלים שמזיזים שטח קיים. המצב נבחר בסרגל האפשרויות (`#shapeModes`). ראו "כלי עיצוב" |
 | הזזה | `panMapBtn` | `pan` | H | גרירת המפה כשהיא מוגדלת |
 | תכסית | `featuresBtn` | `features` | F | מפעיל את סוג הקו האחרון (ברירת מחדל: שביל) |
+| טיפה | `dropBtn` | `drop` | D | לאן זורמת טיפה מנקודה, ואגן ההיקוות שלה. עובד עם גשם ובלעדיו (docs/RAIN.md) |
 | מסלול | `courseBtn` | `course` | C | תכנון מסלול ניווט. ראו [NAVIGATION.md](NAVIGATION.md) |
 | גשם | `rainBtn` | — | W | מתג. מנוהל ב-`rain.js` |
 | ביטול / חזרה | `undoBtn` / `redoBtn` | — | Ctrl+Z / Ctrl+Shift+Z, Ctrl+Y | |

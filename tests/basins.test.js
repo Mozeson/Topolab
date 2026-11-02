@@ -58,3 +58,20 @@ test('the upstream area of a valley outlet holds everything that drains through 
     assert.equal(c, outlet);
   }
 });
+
+test('without rain a drop stops in the first pit it reaches; its catchment is that slope', async () => {
+  const { dryFlow, traceDryPath } = await import('../src/hydrology.js');
+  // A slope towards the south with a small pit half-way down.
+  const h = grid((x, y) => (n - 1 - y) * 2 + Math.abs(x - 20) * .5);
+  h[20 * n + 20] -= 6;
+  const dry = dryFlow(n, h);
+  const path = traceDryPath(dry, 5 * n + 20);
+  assert.equal(path.end.type, 'pit');
+  assert.equal(path.cells[path.cells.length - 1], 20 * n + 20);
+  for (let k = 1; k < path.cells.length; k++) assert.ok(h[path.cells[k]] < h[path.cells[k - 1]]);
+  // A drop that misses the pit leaves the map at the south edge.
+  const side = traceDryPath(dry, 5 * n + 4);
+  assert.equal(side.end.type, 'edge');
+  const { cells } = upstreamArea(dry, 20 * n + 20);
+  assert.ok(cells > 1);
+});

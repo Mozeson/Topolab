@@ -444,3 +444,40 @@ export function upstreamArea(base, target) {
   }
   return { mask, cells };
 }
+
+// ——— A single drop with no rain: the real ground, no filled depressions ———
+// Steepest-descent receivers on the raw heights. Edge cells drain off the map (-1); an
+// interior cell with no lower neighbour is a pit or flat (-1 as well, `pit` = 1).
+export function dryFlow(n, heights) {
+  const count = n * n;
+  const receivers = new Int32Array(count).fill(-1);
+  const pit = new Uint8Array(count);
+  for (let y = 0; y < n; y++) {
+    for (let x = 0; x < n; x++) {
+      const i = y * n + x;
+      if (x === 0 || y === 0 || x === n - 1 || y === n - 1) continue;
+      let best = 0;
+      for (const [dx, dy] of D8) {
+        const j = (y + dy) * n + x + dx;
+        const slope = (heights[i] - heights[j]) / Math.hypot(dx, dy);
+        if (slope > best) { best = slope; receivers[i] = j; }
+      }
+      if (receivers[i] < 0) pit[i] = 1;
+    }
+  }
+  return { size: n, heights, receivers, pit };
+}
+
+export function traceDryPath(dry, start) {
+  const { size: n, receivers, pit } = dry;
+  const cells = [start];
+  let current = start;
+  for (let guard = 0; guard < n * n; guard++) {
+    const next = receivers[current];
+    if (next < 0) break;
+    cells.push(next);
+    current = next;
+  }
+  const end = pit[current] ? { type: 'pit' } : { type: 'edge', cell: current, side: sideOf(n, current) };
+  return { cells, end };
+}
