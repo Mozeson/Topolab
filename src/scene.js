@@ -1027,7 +1027,7 @@ function resizeThree() {
   if (!width || !height) return;
   renderer.setSize(width, height, false);
   camera.aspect = width / height;
-  camera.fov = state.observer.firstPerson ? (state.observer.drone ? 74 : OBSERVER_FOV) : camera.aspect < 0.85 ? 52 : 43;
+  camera.fov = state.observer.firstPerson ? (state.observer.drone ? state.observer.fov || 74 : OBSERVER_FOV) : camera.aspect < 0.85 ? 52 : 43;
   camera.near = state.observer.firstPerson ? metersToWorld() * .3 : .1;
   camera.updateProjectionMatrix();
   if (scene) renderer.render(scene, camera);
@@ -1241,6 +1241,20 @@ function updateObserverCamera() {
     camera.position.z - Math.cos(heading) * horizontal,
   );
   camera.lookAt(target);
+  if (flying) {
+    // FPV: bank (roll) around the view axis, a lens that widens with speed, and shake.
+    if (observer.roll) camera.rotateZ(-observer.roll * Math.PI / 180);
+    if (observer.shake) {
+      const amount = observer.shake * metersToWorld();
+      camera.position.x += (Math.random() - .5) * amount;
+      camera.position.y += (Math.random() - .5) * amount;
+      camera.position.z += (Math.random() - .5) * amount;
+    }
+    if (observer.fov && Math.abs(camera.fov - observer.fov) > .05) {
+      camera.fov = observer.fov;
+      camera.updateProjectionMatrix();
+    }
+  }
   needsRender = true;
 }
 

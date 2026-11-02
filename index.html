@@ -111,6 +111,15 @@
           </div>
           <div class="nav-hud" id="navHud" hidden>
             <div class="nav-vignette" aria-hidden="true"></div>
+            <canvas class="fpv-lines" id="fpvLines" aria-hidden="true"></canvas>
+            <div class="fpv-osd" id="fpvOsd" aria-hidden="true">
+              <div class="fpv-horizon" id="fpvHorizon"><i></i><span class="fpv-pitch p10"></span><span class="fpv-pitch m10"></span></div>
+              <div class="fpv-mode" id="fpvMode">ACRO</div>
+              <div class="fpv-speed"><b id="fpvSpeed">0</b><small>KM/H</small></div>
+              <div class="fpv-throttle"><i id="fpvThrottle"></i><span>THR</span></div>
+              <div class="fpv-pullup" id="fpvPullUp" hidden>⚠ PULL UP</div>
+              <div class="fpv-crash" id="fpvCrash"></div>
+            </div>
             <div class="drone-hud" id="droneHud" hidden>
               <i class="drone-corner tl"></i><i class="drone-corner tr"></i><i class="drone-corner bl"></i><i class="drone-corner br"></i>
               <svg class="drone-cross" viewBox="0 0 80 80" aria-hidden="true"><path d="M40 22v12M40 46v12M22 40h12M46 40h12"/><circle cx="40" cy="40" r="2.2"/></svg>
@@ -126,9 +135,12 @@
               <div class="drone-controls">
                 <button type="button" id="droneUpBtn" aria-label="עלייה (E)" title="עלייה (E / גלגלת)">▲</button>
                 <button type="button" id="droneDownBtn" aria-label="ירידה (Q)" title="ירידה (Q / גלגלת)">▼</button>
+                <button type="button" id="droneTrickBtn" class="drone-trick" title="סיבוב חבית (R)">🌀</button>
+                <button type="button" id="droneModeBtn" class="drone-mode-btn" title="מעבר בין רחפן צילום ל־FPV (F)">⚡ FPV</button>
                 <button type="button" id="droneLandBtn" class="drone-land" title="נחיתה — ממשיכים ברגל מנקודת הנחיתה">🛬 נחיתה</button>
               </div>
-              <div class="drone-keys"><kbd>W</kbd><kbd>S</kbd> טיסה · <kbd>A</kbd><kbd>D</kbd> סיבוב · <kbd>E</kbd><kbd>Q</kbd> גובה · גרירה: זווית מצלמה · <kbd>Shift</kbd> טורבו</div>
+              <div class="drone-keys drone-keys-cam"><kbd>W</kbd><kbd>S</kbd> טיסה · <kbd>A</kbd><kbd>D</kbd> סיבוב · <kbd>E</kbd><kbd>Q</kbd> גובה · גרירה: זווית מצלמה · <kbd>Shift</kbd> טורבו · <kbd>F</kbd> FPV</div>
+              <div class="drone-keys drone-keys-fpv"><kbd>W</kbd><kbd>S</kbd> גז/בלם · <kbd>↑</kbd><kbd>↓</kbd> אף · <kbd>A</kbd><kbd>D</kbd> פנייה · <kbd>Space</kbd><kbd>Q</kbd> גובה · <kbd>Shift</kbd> בוסט · <kbd>R</kbd> סיבוב · <kbd>F</kbd> צילום</div>
             </div>
             <div class="nav-compass" id="navCompass" aria-hidden="true">
               <div class="nav-compass-window">

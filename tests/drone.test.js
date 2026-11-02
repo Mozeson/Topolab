@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { DRONE, stepAltitude, stepLanding, stepBattery, canReadNote, feedCheat } from '../src/drone.js';
+import { DRONE, FPV, stepAltitude, stepLanding, stepBattery, canReadNote, feedCheat, fpvTopSpeed, fpvVelocity, fpvGround, terrainAhead } from '../src/drone.js';
 
 test('the drone climbs towards its target at the climb rate', () => {
   let state = { altitude: 102, target: 160 };
@@ -54,6 +54,56 @@ test('the cheat code works in English and Hebrew and ignores other keys', () => 
   }, { buffer: '', matched: false });
   assert.equal(type('xxDRONE').matched, true);
   assert.equal(type('רחפן').matched, true);
+  assert.equal(feedCheat('fp', 'v').mode, 'fpv');
+  assert.equal(feedCheat('כפ', 'ה').mode, 'fpv');
+  assert.equal(feedCheat('dron', 'e').mode, 'drone');
   assert.equal(type('dron').matched, false);
   assert.equal(feedCheat('dron', 'ArrowUp').matched, false);
+});
+
+test('FPV: full throttle settles at the top speed, boost goes faster', () => {
+  const top = fpvTopSpeed(4000);
+  assert.equal(top, 140);
+  let vel = { x: 0, y: 0, z: 0 };
+  for (let i = 0; i < 600; i++) vel = fpvVelocity({ vel, heading: 90, tilt: 0, throttle: 1, dt: 1 / 60, topSpeed: top });
+  const speed = Math.hypot(vel.x, vel.y, vel.z);
+  assert.ok(Math.abs(speed - top) < 2, `cruise ${speed}`);
+  assert.ok(vel.x > 0 && Math.abs(vel.z) < 1e-6, 'heading 90° flies east');
+  for (let i = 0; i < 600; i++) vel = fpvVelocity({ vel, heading: 90, tilt: 0, throttle: 1, boost: true, dt: 1 / 60, topSpeed: top });
+  assert.ok(Math.hypot(vel.x, vel.y, vel.z) > top * 1.7);
+  assert.ok(fpvTopSpeed(1000) === FPV.minSpeed && fpvTopSpeed(100000) === FPV.maxSpeed);
+});
+
+test('FPV: pointing the nose down dives, letting go coasts to a stop', () => {
+  let vel = { x: 0, y: 0, z: 0 };
+  for (let i = 0; i < 120; i++) vel = fpvVelocity({ vel, heading: 0, tilt: -45, throttle: 1, dt: 1 / 60, topSpeed: 100 });
+  assert.ok(vel.y < -20 && vel.z < -20, 'down and north');
+  for (let i = 0; i < 600; i++) vel = fpvVelocity({ vel, heading: 0, tilt: -45, throttle: 0, dt: 1 / 60, topSpeed: 100 });
+  assert.ok(Math.hypot(vel.x, vel.y, vel.z) < 1);
+});
+
+test('FPV: skimming the ground lifts the drone, a hard hit is a crash', () => {
+  const skim = fpvGround({ altitude: 101, vel: { x: 50, y: -2, z: 0 }, ground: 100, dt: .1 });
+  assert.equal(skim.crashed, false);
+  assert.equal(skim.altitude, 100 + FPV.minClearance);
+  assert.ok(skim.vel.y >= 0 && skim.vel.x < 50 && skim.vel.x > 40);
+  const crash = fpvGround({ altitude: 80, vel: { x: 120, y: -60, z: 0 }, ground: 100, dt: .1 });
+  assert.equal(crash.crashed, true);
+  assert.ok(crash.altitude > 100 && crash.vel.x < 50 && crash.vel.y > 0);
+  const air = fpvGround({ altitude: 200, vel: { x: 1, y: 1, z: 1 }, ground: 100, dt: .1 });
+  assert.equal(air.crashed, false);
+  assert.equal(air.altitude, 200);
+});
+
+test('terrain warning looks ahead along the flight path', () => {
+  const flat = () => 0;
+  // Skimming level over flat ground is allowed: no warning.
+  assert.equal(terrainAhead({ altitude: FPV.minClearance, vel: { x: 100, y: 0, z: 0 }, groundAt: flat }), Infinity);
+  // A steep dive: 53 m up at −50 m/s reaches the ground in about a second.
+  assert.ok(Math.abs(terrainAhead({ altitude: 53, vel: { x: 0, y: -50, z: 0 }, groundAt: flat }) - 1.2) < 1e-9);
+  // Level flight towards a hillside (30% slope) at 100 m/s.
+  const hill = (dx) => dx * .3;
+  assert.ok(Math.abs(terrainAhead({ altitude: 20, vel: { x: 100, y: 0, z: 0 }, groundAt: hill }) - .8) < 1e-9);
+  // Climbing as steeply as the hill rises: clear.
+  assert.equal(terrainAhead({ altitude: 20, vel: { x: 100, y: 30, z: 0 }, groundAt: hill }), Infinity);
 });

@@ -8,7 +8,7 @@ import {
   naismithMinutes, totalScore, courseKey, drawCourse, courseLength, random, COURSE_COLOR,
 } from './course.js';
 import { readCoordinate, formatCoordinate } from './grid-coords.js';
-import { DRONE, stepAltitude, stepLanding, stepBattery, canReadNote, feedCheat } from './drone.js';
+import { DRONE, FPV, stepAltitude, stepLanding, stepBattery, canReadNote, feedCheat, fpvTopSpeed, fpvVelocity, fpvGround, terrainAhead } from './drone.js';
 
 export const NAV_LEVELS = {
   easy: { mapMode: 'always', showPosition: true, showBearing: true, showDistance: true },
@@ -598,6 +598,8 @@ export function createNavGame(api) {
       // Drone mode: altitudes in display metres (terrain height × exaggeration).
       drone: false, landing: false, droneUsed: false, flown: 0, battery: 100, altitude: 0, target: 0,
       droneTime: 0, droneSpeed: 0, lowWarned: false,
+      // FPV racing mode (on top of the drone): momentum, banking, tricks.
+      fpv: false, vel: { x: 0, y: 0, z: 0 }, roll: 0, fov: 92, shake: 0, maxSpeed: 0, tricks: 0, trick: null, crashes: 0, crashCool: 0, throttle: 0, boosting: false,
     };
     setDroneUi(false);
     Object.assign(api.observer, { u: startPoint.u, v: startPoint.v, heading: 0, tilt: -4, bob: 0 });
@@ -739,7 +741,7 @@ export function createNavGame(api) {
     resultsDialog.open && resultsDialog.close();
     clearTimeout(countdownTimer);
     if (world) world.flags.forEach((f) => f.userData.materials.forEach((m) => { m.opacity = 1; }));
-    if (run?.drone) { api.observer.flyY = undefined; api.setDrone?.(false); }
+    if (run?.drone) { Object.assign(api.observer, { flyY: undefined, roll: 0, shake: 0, fov: undefined }); api.setDrone?.(false); }
     stopBuzz();
     resetRun();
     configureMapUI();
@@ -751,7 +753,7 @@ export function createNavGame(api) {
 
   function stop() {
     clearTimeout(countdownTimer);
-    if (run?.drone) { api.observer.flyY = undefined; api.setDrone?.(false); }
+    if (run?.drone) { Object.assign(api.observer, { flyY: undefined, roll: 0, shake: 0, fov: undefined }); api.setDrone?.(false); }
     setDroneUi(false);
     stopBuzz();
     phase = 'idle';
@@ -838,6 +840,78 @@ export function createNavGame(api) {
     document.body.classList.toggle('drone-mode', on);
     $('droneHud').hidden = !on;
     if (world?.droneShadow) world.droneShadow.visible = on;
+    if (!on) setFpvUi(false);
+  }
+
+  function setFpvUi(on) {
+    document.body.classList.toggle('fpv-mode', on);
+    $('droneModeBtn').textContent = on ? '🎥 צילום' : '⚡ FPV';
+    if (!on) {
+      const canvas = $('fpvLines');
+      canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
+      $('fpvPullUp').hidden = true;
+    }
+  }
+
+  // FPV on/off while flying. Leaving FPV hands over to the steady camera drone.
+  function setFpv(on, quiet = false) {
+    if (!run?.drone || run.landing || run.fpv === on) return; // not while landing
+    const o = api.observer;
+    run.fpv = on;
+    run.vel = { x: 0, y: 0, z: 0 };
+    run.roll = 0;
+    run.trick = null;
+    o.roll = 0;
+    o.shake = 0;
+    if (world?.droneShadow) world.droneShadow.visible = !on;
+    if (on) {
+      // Level the nose so W flies forward; from the ground, punch out upwards.
+      o.tilt = 0;
+      if (droneAgl() < 12) run.vel.y = 30;
+      run.fov = 92;
+      o.fov = run.fov;
+      if (!quiet) {
+        flash(matchMedia('(pointer: coarse)').matches
+          ? '⚡ FPV! סטיק שמאלי: גז ופנייה · ימני: אף וצד · דחיפה עד הסוף = בוסט'
+          : '⚡ FPV! W גז · חצים לאף · Shift בוסט · R סיבוב');
+        beep([[523, .07], [784, .07], [1047, .07], [1568, .2]]);
+      }
+    } else {
+      run.target = run.altitude;
+      o.tilt = clamp(o.tilt, -89, 10);
+      o.fov = 74;
+      if (!quiet) flash('🎥 רחפן צילום');
+    }
+    setFpvUi(on);
+  }
+
+  // Typed codes: "רחפן"/"drone" takes off (or lands); "fpv" takes off straight into FPV.
+  function onCheat(mode) {
+    if (!run.drone) {
+      toggleDrone();
+      if (mode === 'fpv') setFpv(true);
+      return;
+    }
+    if (mode === 'drone') beginLanding();
+    // "fpv" while flying: the F key in it has already switched the mode.
+  }
+
+  function startTrick() {
+    if (!run?.fpv || run.trick || run.landing) return;
+    run.trick = { t: 0, dir: Math.random() < .5 ? -1 : 1 };
+    beep([[660, .06], [880, .06], [1175, .12]]);
+  }
+
+  function crash(closing) {
+    run.crashes++;
+    run.shake = 2.6;
+    run.battery = Math.max(0, run.battery - 4);
+    flash(closing > 90 ? '💥 התרסקות!' : '💥 נגיעה בקרקע!', true);
+    beep([[110, .25], [70, .3]]);
+    const overlay = $('fpvCrash');
+    overlay.classList.remove('hit');
+    void overlay.offsetWidth;
+    overlay.classList.add('hit');
   }
 
   function toggleDrone() {
@@ -864,6 +938,7 @@ export function createNavGame(api) {
 
   function beginLanding(reason = '') {
     if (!run?.drone || run.landing) return;
+    if (run.fpv) setFpv(false, true);
     run.landing = true;
     flash(reason || '🛬 נוחתים…', Boolean(reason));
   }
@@ -872,7 +947,8 @@ export function createNavGame(api) {
     const o = api.observer;
     run.drone = false;
     run.landing = false;
-    o.flyY = undefined;
+    run.fpv = false;
+    Object.assign(o, { flyY: undefined, roll: 0, shake: 0, fov: undefined });
     o.tilt = -4;
     api.setDrone?.(false);
     setDroneUi(false);
@@ -930,6 +1006,132 @@ export function createNavGame(api) {
     if (run.battery <= 0) beginLanding('🔋 הסוללה נגמרה — נחיתה אוטומטית');
     updateDroneShadow(ground);
     updateBuzz();
+  }
+
+  // ——— FPV flight: momentum, banking, wide lens, speed lines, crashes ———
+  function fpvStep(dt, input) {
+    const o = api.observer;
+    const extent = api.extent();
+    const top = fpvTopSpeed(extent);
+    run.boosting = input.boost && input.throttle > .1;
+    o.heading = (o.heading + input.yaw * FPV.turnRate * dt + 360) % 360;
+    o.tilt = clamp(o.tilt - input.pitchDown * FPV.pitchRate * dt, -85, 60);
+    run.throttle = clamp(input.throttle, -1, 1);
+    run.vel = fpvVelocity({ vel: run.vel, heading: o.heading, tilt: o.tilt, throttle: run.throttle, strafe: input.strafe, climb: input.climb, boost: run.boosting, dt, topSpeed: top });
+    let nu = o.u + run.vel.x * dt / extent;
+    let nv = o.v + run.vel.z * dt / extent;
+    if (nu < .002 || nu > .998) { nu = clamp(nu, .002, .998); run.vel.x = 0; }
+    if (nv < .002 || nv > .998) { nv = clamp(nv, .002, .998); run.vel.z = 0; }
+    const step = distanceMeters(o, { u: nu, v: nv }, extent);
+    o.u = nu;
+    o.v = nv;
+    run.flown += step;
+    run.altitude += run.vel.y * dt;
+    const ground = groundDisplay(o.u, o.v);
+    const contact = fpvGround({ altitude: run.altitude, vel: run.vel, ground, dt });
+    run.altitude = contact.altitude;
+    run.vel = contact.vel;
+    run.crashCool = Math.max(0, (run.crashCool || 0) - dt);
+    if (contact.crashed && run.crashCool <= 0) { crash(contact.closing); run.crashCool = .8; }
+    if (run.altitude > ground + DRONE.maxAgl) { run.altitude = ground + DRONE.maxAgl; run.vel.y = Math.min(run.vel.y, 0); }
+    const speed = Math.hypot(run.vel.x, run.vel.y, run.vel.z);
+    run.droneSpeed = speed;
+    run.maxSpeed = Math.max(run.maxSpeed, speed);
+    const ratio = speed / top;
+
+    // Bank into turns and sideways moves; R adds a full barrel roll.
+    const targetRoll = input.yaw * 32 + input.strafe * 22;
+    run.roll += (targetRoll - run.roll) * Math.min(1, dt * 6);
+    let trickRoll = 0;
+    if (run.trick) {
+      run.trick.t += dt / .7;
+      const t = Math.min(1, run.trick.t);
+      trickRoll = run.trick.dir * 360 * (t < .5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2);
+      if (run.trick.t >= 1) {
+        run.trick = null;
+        run.tricks++;
+        flash(`🌀 סיבוב חבית! (${run.tricks})`);
+      }
+    }
+    o.roll = run.roll + trickRoll;
+    // Wide lens that opens up with speed (and kicks on boost); shake when fast or skimming.
+    const targetFov = Math.min(125, 92 + 22 * ratio + (run.boosting ? 8 : 0));
+    run.fov += (targetFov - run.fov) * Math.min(1, dt * 3);
+    o.fov = run.fov;
+    run.shake = Math.max(0, run.shake - dt * 3.2);
+    o.shake = run.shake + (ratio > .75 ? (ratio - .75) * .9 : 0) + (contact.skimming && speed > 20 ? .45 : 0);
+
+    o.flyY = run.altitude * api.metersToWorld();
+    run.droneTime += dt;
+    run.battery = stepBattery(run.battery, dt * FPV.batteryFactor, true);
+    if (!run.lowWarned && run.battery <= DRONE.lowBattery) {
+      run.lowWarned = true;
+      flash(`🔋 סוללה חלשה (${Math.round(run.battery)}%) — כדאי לנחות`, true);
+      beep([[440, .12], [330, .2]]);
+    }
+    if (run.battery <= 0) beginLanding('🔋 הסוללה נגמרה — נחיתה אוטומטית');
+    updateFpvOsd(speed);
+    drawSpeedLines(dt, ratio);
+    updateBuzz();
+    if (run.keysFade > 0) run.keysFade -= dt;
+  }
+
+  function updateFpvOsd(speed) {
+    const o = api.observer;
+    const hud = $('navHud');
+    // Where the real horizon is on screen: pitch moves it along the (rolled) vertical, and
+    // it rolls opposite to the drone. Perspective scale: (h/2)·tan(angle)/tan(fov/2).
+    const h = hud.clientHeight || 600;
+    const focal = h / 2 / Math.tan(run.fov * Math.PI / 360);
+    const offset = clamp(focal * Math.tan(clamp(o.tilt, -80, 80) * Math.PI / 180), -h, h);
+    const horizon = $('fpvHorizon');
+    horizon.style.transform = `rotate(${-(o.roll || 0)}deg) translateY(${offset}px)`;
+    horizon.style.setProperty('--p10', `${focal * Math.tan(Math.PI / 18)}px`);
+    $('fpvSpeed').textContent = String(Math.round(speed * 3.6));
+    $('fpvThrottle').style.width = `${Math.round(Math.max(0, run.throttle) * 100)}%`;
+    const mode = $('fpvMode');
+    mode.textContent = run.boosting ? 'BOOST' : run.trick ? 'FLIP' : 'ACRO';
+    mode.classList.toggle('boost', run.boosting);
+    // PULL UP: the flight path meets the ground (a dive or a hillside ahead) within ~1.2 s.
+    const extent = api.extent();
+    const ahead = speed > 25 ? terrainAhead({
+      altitude: run.altitude,
+      vel: run.vel,
+      groundAt: (dx, dz) => groundDisplay(clamp(o.u + dx / extent, 0, 1), clamp(o.v + dz / extent, 0, 1)),
+    }) : Infinity;
+    $('fpvPullUp').hidden = !Number.isFinite(ahead);
+  }
+
+  // Streaks rushing out from the centre, stronger with speed.
+  const streaks = Array.from({ length: 80 }, (_, i) => ({ angle: i * 2.39996, dist: (i * .618) % 1, width: .6 + (i % 5) * .35 }));
+  function drawSpeedLines(dt, ratio) {
+    const canvas = $('fpvLines');
+    const hud = $('navHud');
+    const w = hud.clientWidth;
+    const h = hud.clientHeight;
+    if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, w, h);
+    const strength = clamp((ratio - .3) * 1.3 + (run.boosting ? .25 : 0), 0, .85);
+    if (strength <= 0) return;
+    const cx = w / 2;
+    const cy = h / 2;
+    const reach = Math.hypot(cx, cy);
+    ctx.lineCap = 'round';
+    for (const streak of streaks) {
+      streak.dist += dt * (.35 + ratio * 2.2) * (.4 + streak.dist);
+      if (streak.dist > 1.05) { streak.dist = .12 + Math.random() * .2; streak.angle = Math.random() * Math.PI * 2; }
+      const r1 = streak.dist * reach;
+      const r2 = Math.min(1.1, streak.dist + .04 + ratio * .14) * reach;
+      const dx = Math.cos(streak.angle);
+      const dy = Math.sin(streak.angle);
+      ctx.strokeStyle = `rgba(255,255,255,${strength * Math.min(1, streak.dist * 1.6)})`;
+      ctx.lineWidth = streak.width * (1 + ratio);
+      ctx.beginPath();
+      ctx.moveTo(cx + dx * r1, cy + dy * r1);
+      ctx.lineTo(cx + dx * r2, cy + dy * r2);
+      ctx.stroke();
+    }
   }
 
   function droneAgl() {
@@ -1013,7 +1215,10 @@ export function createNavGame(api) {
     if (want && !buzz) startBuzz();
     if (!want && buzz) stopBuzz();
     if (buzz) {
-      const pitch = 150 + Math.min(1, run.droneSpeed / 120) * 70 + droneClimbInput * 15;
+      const pitch = run.fpv
+        ? 190 + Math.min(1.6, run.droneSpeed / fpvTopSpeed(api.extent())) * 230 + Math.max(0, run.throttle) * 40
+        : 150 + Math.min(1, run.droneSpeed / 120) * 70 + droneClimbInput * 15;
+      buzz.gain.gain.setTargetAtTime(run.fpv ? .028 : .016, audio.currentTime, .2);
       buzz.a.frequency.setTargetAtTime(pitch, audio.currentTime, .15);
       buzz.b.frequency.setTargetAtTime(pitch * 1.04, audio.currentTime, .15);
     }
@@ -1029,6 +1234,8 @@ export function createNavGame(api) {
     button.addEventListener('lostpointercapture', release);
   }
   $('droneLandBtn').addEventListener('click', () => beginLanding());
+  $('droneModeBtn').addEventListener('click', () => setFpv(!run?.fpv));
+  $('droneTrickBtn').addEventListener('click', () => startTrick());
   // Five quick taps on the timer (the way in on touch screens).
   // Counted as a streak: each tap must come within 0.9 s of the previous one.
   $('navTimer').addEventListener('click', () => {
@@ -1039,7 +1246,7 @@ export function createNavGame(api) {
   });
 
   // ——— Input ———
-  const MOVE_KEYS = new Set(['KeyW', 'KeyS', 'KeyA', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'ShiftLeft', 'ShiftRight', 'KeyE', 'KeyQ', 'PageUp', 'PageDown']);
+  const MOVE_KEYS = new Set(['KeyW', 'KeyS', 'KeyA', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'ShiftLeft', 'ShiftRight', 'KeyE', 'KeyQ', 'PageUp', 'PageDown', 'Space']);
   document.addEventListener('keydown', (event) => {
     if (phase === 'idle' || phase === 'finished' || document.querySelector('dialog[open]')) return;
     if (event.code === 'Escape') { event.preventDefault(); phase === 'paused' ? resume() : pause(); return; }
@@ -1047,7 +1254,9 @@ export function createNavGame(api) {
     if (phase === 'running' && !event.repeat && !event.ctrlKey && !event.metaKey && !event.altKey) {
       const cheat = feedCheat(cheatBuffer, event.key);
       cheatBuffer = cheat.buffer;
-      if (cheat.matched) { event.preventDefault(); toggleDrone(); return; }
+      if (cheat.matched) { event.preventDefault(); onCheat(cheat.mode); return; }
+      if (run?.drone && event.code === 'KeyF') { event.preventDefault(); setFpv(!run.fpv); return; }
+      if (run?.fpv && event.code === 'KeyR') { event.preventDefault(); startTrick(); return; }
     }
     if (event.code === 'KeyM') { event.preventDefault(); if (!event.repeat) toggleMap(); return; }
     if (MOVE_KEYS.has(event.code)) { event.preventDefault(); keys.add(event.code); }
@@ -1065,7 +1274,8 @@ export function createNavGame(api) {
     if (!look || event.pointerId !== look.id) return;
     const o = api.observer;
     o.heading = (o.heading + (event.clientX - look.x) * .22 + 360) % 360;
-    o.tilt = run?.drone ? clamp(o.tilt - (event.clientY - look.y) * .2, -89, 10) : clamp(o.tilt - (event.clientY - look.y) * .15, -40, 35);
+    o.tilt = run?.fpv ? clamp(o.tilt - (event.clientY - look.y) * .2, -85, 60)
+      : run?.drone ? clamp(o.tilt - (event.clientY - look.y) * .2, -89, 10) : clamp(o.tilt - (event.clientY - look.y) * .15, -40, 35);
     look.x = event.clientX;
     look.y = event.clientY;
   });
@@ -1093,10 +1303,19 @@ export function createNavGame(api) {
       const turn = clamp((has('KeyD', 'ArrowRight') ? 1 : 0) - (has('KeyA', 'ArrowLeft') ? 1 : 0) + sticks.look.x, -1, 1);
       const running = has('ShiftLeft', 'ShiftRight') || Math.hypot(sticks.move.x, sticks.move.y) > .97;
       run.elapsed += dt;
-      o.heading = (o.heading + turn * TURN_SPEED * dt + 360) % 360;
+      if (!run.fpv) o.heading = (o.heading + turn * TURN_SPEED * dt + 360) % 360;
       const extent = api.extent();
       const moving = Math.hypot(forward, strafe) > .05;
-      if (run.drone) {
+      if (run.fpv) {
+        fpvStep(dt, {
+          throttle: (has('KeyW') ? 1 : 0) - (has('KeyS') ? 1 : 0) + sticks.move.y,
+          yaw: clamp((has('KeyD', 'ArrowRight') ? 1 : 0) - (has('KeyA', 'ArrowLeft') ? 1 : 0) + sticks.move.x, -1, 1),
+          pitchDown: clamp((has('ArrowUp') ? 1 : 0) - (has('ArrowDown') ? 1 : 0) + sticks.look.y, -1, 1),
+          strafe: clamp(sticks.look.x, -1, 1),
+          climb: clamp((has('KeyE', 'Space', 'PageUp') ? 1 : 0) - (has('KeyQ', 'PageDown') ? 1 : 0) + droneClimbInput, -1, 1),
+          boost: has('ShiftLeft', 'ShiftRight') || sticks.move.y > .95, // touch: stick pushed all the way forward
+        });
+      } else if (run.drone) {
         o.tilt = clamp(o.tilt + sticks.look.y * 60 * dt, -89, 10);
         flyStep(dt, forward, strafe, running);
       } else {
@@ -1179,7 +1398,7 @@ export function createNavGame(api) {
     const g = Math.round(run.grade * 100);
     const slopeText = Math.abs(g) < 3 ? 'מישור' : g > 0 ? `עלייה ${g}%` : `ירידה ${-g}%`;
     const groundText = run.ground?.onPath ? 'דרך' : run.ground?.area || '';
-    $('navSlopeText').textContent = run.drone ? '🚁 טיסה' : groundText ? `${slopeText} · ${groundText}` : slopeText;
+    $('navSlopeText').textContent = run.fpv ? '⚡ FPV' : run.drone ? '🚁 טיסה' : groundText ? `${slopeText} · ${groundText}` : slopeText;
     if (run.drone) $('navPaceBar').style.width = '100%';
     const hint = $('navHint');
     const next = points[run.next];
@@ -1200,7 +1419,7 @@ export function createNavGame(api) {
 
   // ——— Results ———
   function finish() {
-    if (run.drone) { api.observer.flyY = undefined; api.setDrone?.(false); run.drone = false; setDroneUi(false); }
+    if (run.drone) { Object.assign(api.observer, { flyY: undefined, roll: 0, shake: 0, fov: undefined }); api.setDrone?.(false); run.drone = false; run.fpv = false; setDroneUi(false); }
     stopBuzz();
     phase = 'finished';
     keys.clear();
@@ -1229,6 +1448,9 @@ export function createNavGame(api) {
       ['טיפוס מצטבר', `${Math.round(run.ascent)} מ׳`],
       ['בשטח אמיתי (נייסמית׳)', `כ־${Math.round(naismithMinutes(run.walked, run.ascent))} דק׳`],
       ...(run.droneUsed ? [['טסתם ברחפן', formatMeters(run.flown)]] : []),
+      ...(run.maxSpeed > 0 ? [['מהירות שיא', `${Math.round(run.maxSpeed * 3.6)} קמ״ש`]] : []),
+      ...(run.tricks ? [['טריקים', `🌀 ${run.tricks}`]] : []),
+      ...(run.crashes ? [['התרסקויות', `💥 ${run.crashes}`]] : []),
       [settings.mapMode === 'peek' ? 'הצצות במפה' : 'מפה', settings.mapMode === 'peek' ? String(run.peeks) : settings.mapMode === 'none' ? 'מהזיכרון' : 'פתוחה'],
     ];
     $('navResultGrid').innerHTML = cells.map(([label, value]) => `<div><small>${label}</small><strong>${value}</strong></div>`).join('');
@@ -1294,7 +1516,8 @@ export function createNavGame(api) {
     },
     stats: () => (run ? {
       phase, level, settings: { ...settings }, next: run.next, elapsed: run.elapsed, peeks: run.peeks, walked: run.walked, ascent: run.ascent, splits: run.splits.length,
-      drone: { active: run.drone, landing: run.landing, used: run.droneUsed, agl: run.drone ? droneAgl() : 0, battery: run.battery, flown: run.flown },
+      drone: { active: run.drone, landing: run.landing, used: run.droneUsed, agl: run.drone ? droneAgl() : 0, battery: run.battery, flown: run.flown,
+        fpv: run.fpv, speedKmh: Math.round(run.droneSpeed * 3.6), maxKmh: Math.round(run.maxSpeed * 3.6), tricks: run.tricks, crashes: run.crashes, fov: run.fov, roll: api.observer.roll || 0 },
     } : { phase }),
   };
 }
