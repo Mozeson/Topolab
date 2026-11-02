@@ -212,6 +212,9 @@
               <button class="rail-tool rail-drop" id="dropBtn" type="button" data-tool="drop" aria-pressed="false" data-shortcut="tool-drop" data-title="לאן תזרום טיפה מכל נקודה, ומאיפה מגיעים אליה מים">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3s6 6.5 6 11a6 6 0 0 1-12 0c0-4.5 6-11 6-11Z"/><path d="M9.5 14.5a2.5 2.5 0 0 0 2.5 2.5" opacity=".6"/></svg><span>טיפה</span>
               </button>
+              <button class="rail-tool rail-waypoint" id="waypointBtn" type="button" data-tool="waypoint" aria-pressed="false" data-shortcut="tool-waypoint" data-title="נקודת ציון: הקואורדינטה של נקודה במפה">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="6"/><path d="M12 2v5M12 17v5M2 12h5M17 12h5"/></svg><span>נ״צ</span>
+              </button>
             </div>
             <div class="rail-group rail-history" role="group" aria-label="היסטוריה">
               <button class="rail-tool rail-compact" id="undoBtn" type="button" disabled data-shortcut="undo" aria-label="ביטול">
@@ -253,6 +256,13 @@
                 </label>
                 <span class="shape-hint" id="shapeHint" hidden></span>
                 <span class="options-hint" id="sculptHint"><kbd>Alt</kbd> היפוך · <kbd>Shift</kbd> החלקה · <kbd>רווח</kbd> הזזה</span>
+              </div>
+              <div class="options-group waypoint-options" id="waypointOptions" hidden>
+                <span class="options-tool waypoint">נ״צ</span>
+                <span class="waypoint-live" id="waypointLive">העבירו את הסמן על המפה</span>
+                <button class="footer-button" id="undoWaypointBtn" type="button" title="הסרת הנקודה האחרונה (Backspace)">הסרת אחרונה</button>
+                <button class="footer-button" id="clearWaypointsBtn" type="button">ניקוי</button>
+                <span class="options-hint waypoint-hint">לחצו על נקודה במפה כדי לסמן אותה. הנ״צ נכתב צפון/מזרח, בדיוק של 100 מ׳.</span>
               </div>
               <div class="options-group" id="dropOptions" hidden>
                 <span class="options-tool drop">טיפה</span>
@@ -385,6 +395,16 @@
                   <option value="10">10 מ׳</option>
                 </select>
               </label>
+              <details class="scale-help grid-settings" id="gridSettings">
+                <summary aria-label="ערכי רשת הקואורדינטות" title="ערכי רשת הקואורדינטות">#</summary>
+                <div class="grid-settings-card">
+                  <strong>רשת הקואורדינטות</strong>
+                  <p>הערכים בפינה הדרומית־מערבית של המפה (שמאל למטה), במטרים.</p>
+                  <label for="gridOriginE">מזרח <input id="gridOriginE" type="number" min="0" max="9999999" step="1000" inputmode="numeric"></label>
+                  <label for="gridOriginN">צפון <input id="gridOriginN" type="number" min="0" max="9999999" step="1000" inputmode="numeric"></label>
+                  <div class="grid-settings-actions"><button class="footer-button" id="gridOriginApply" type="button">החלה</button><button class="footer-button" id="gridOriginReset" type="button">ברירת מחדל</button></div>
+                </div>
+              </details>
               <details class="scale-help">
                 <summary aria-label="הסבר על קנה המידה והזום" title="על קנה המידה והזום">?</summary>
                 <p id="printScaleHelp">קנה המידה קובע את המרחק האמיתי של המשבצות: ב־1:25,000 כל משבצת מייצגת 500 מ׳, ב־1:50,000 היא מייצגת 1 ק״מ, וב־1:100,000 היא מייצגת 2 ק״מ. במפה קטנה, משבצת לא תהיה גדולה מצלע המפה. הזום רק מקרב או מרחיק את התצוגה: השטח, הקואורדינטות והגבהים אינם משתנים.</p>

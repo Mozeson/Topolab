@@ -13,6 +13,7 @@ import { createAutosave, loadProject, clearProject } from './persistence.js';
 import { initShortcuts, SHORTCUTS, HOLD_HINTS, shortcutLabel } from './shortcuts.js';
 import { emptyCourse, sanitizeCourse, isRunnable, generateCourse, courseLength, drawCourse, coursePoints, cloneCourse } from './course.js';
 import { createNavGame } from './nav-game.js';
+import { DEFAULT_ORIGIN, sanitizeOrigin, readCoordinate, formatCoordinate } from './grid-coords.js';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { contours } from 'd3-contour';
@@ -32,7 +33,7 @@ const plinthBox = () => new THREE.BoxGeometry(WORLD_SIZE + .12 * plinthScale(), 
 const EYE_HEIGHT_METERS = 1.7;
 const OBSERVER_FOV = 65;
 let heights = new Float32Array(N * N);
-const TOOL_LABELS = { raise: 'הגבהה', lower: 'הנמכה', smooth: 'החלקה', smudge: 'מריחה', pinch: 'צביטה', flatten: 'השטחה', pan: 'הזזת מפה', features: 'תכסית', course: 'מסלול', drop: 'טיפה' };
+const TOOL_LABELS = { raise: 'הגבהה', lower: 'הנמכה', smooth: 'החלקה', smudge: 'מריחה', pinch: 'צביטה', flatten: 'השטחה', pan: 'הזזת מפה', features: 'תכסית', course: 'מסלול', drop: 'טיפה', waypoint: 'נ״צ' };
 const SHAPE_HINTS = {
   smudge: 'גררו: השטח נמרח בכיוון התנועה — מאריכים שלוחה, מזיזים פסגה',
   pinch: 'החזיקו על גיא כדי להצר אותו, על רכס כדי לחדד · Alt: הרחבה ומריחת כיפה',
@@ -43,6 +44,8 @@ const state = {
   lastSculptTool: 'raise', // which sculpt tool the "עיצוב" rail button stands for
   flattenTarget: 0,       // height (m) the flatten tool levels to, set when a stroke starts
   course: emptyCourse(),  // orienteering course (course.js)
+  gridOrigin: { ...DEFAULT_ORIGIN }, // easting/northing of the map's south-west corner
+  waypoints: [],          // נ״צ markers: [{ u, v }]
   coursePlace: 'control', // what a click places with the course tool: 'start' | 'control' | 'finish'
   navigating: false,      // the navigation game owns the screen (nav-game.js)
   tempPan: false,         // space held over the map
@@ -321,7 +324,7 @@ function positionMapOverlays(baseSide) {
   infoToggle.style.right = `${offsetX + 14}px`;
   infoToggle.style.top = `${offsetY + 14}px`;
   north.style.left = `${offsetX + 14}px`;
-  north.style.top = `${offsetY + 13}px`;
+  north.style.top = `${offsetY + 24}px`; // below the frame and the top coordinate labels
   scale.style.left = `${offsetX + 15}px`;
   scale.style.bottom = `${offsetY + 14}px`;
   mode.style.right = `${offsetX + 14}px`;
@@ -414,9 +417,37 @@ function drawGridLines(ctx, w, h, dpr) {
     ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
   }
-  ctx.strokeStyle = 'rgba(55,76,80,.78)';
-  ctx.lineWidth = 1.1 * dpr;
-  ctx.strokeRect(1 * dpr, 1 * dpr, w - 2 * dpr, h - 2 * dpr);
+  ctx.restore();
+  drawMapFrame(ctx, w, h, dpr);
+}
+
+// Topographic-map neatline: a band along the edge, alternating black and white for each
+// grid square, framed by thin lines (like the margin of a printed 1:50,000 sheet).
+const FRAME_BAND = 8;
+function drawMapFrame(ctx, w, h, dpr) {
+  const count = gridCellCount();
+  const t = FRAME_BAND * dpr;
+  ctx.save();
+  ctx.fillStyle = '#fdfcf8';
+  ctx.fillRect(0, 0, w, t); ctx.fillRect(0, h - t, w, t);
+  ctx.fillRect(0, 0, t, h); ctx.fillRect(w - t, 0, t, h);
+  ctx.fillStyle = '#1d211f';
+  for (let i = 0; i < count; i += 2) {
+    const x0 = i * w / count;
+    const x1 = (i + 1) * w / count;
+    ctx.fillRect(x0, 0, x1 - x0, t);
+    ctx.fillRect(x0, h - t, x1 - x0, t);
+    // Vertical edges count from the south so the pattern matches the northing labels.
+    const y1 = h - i * h / count;
+    const y0 = h - (i + 1) * h / count;
+    ctx.fillRect(0, y0, t, y1 - y0);
+    ctx.fillRect(w - t, y0, t, y1 - y0);
+  }
+  ctx.strokeStyle = '#1d211f';
+  ctx.lineWidth = 1.4 * dpr;
+  ctx.strokeRect(.7 * dpr, .7 * dpr, w - 1.4 * dpr, h - 1.4 * dpr);
+  ctx.lineWidth = 1 * dpr;
+  ctx.strokeRect(t, t, w - 2 * t, h - 2 * t);
   ctx.restore();
 }
 
@@ -431,12 +462,14 @@ function drawGridLabels(ctx, w, h, dpr) {
   ctx.fillStyle = '#4e6870';
   ctx.textBaseline = 'middle';
   ctx.textAlign = 'center';
+  const { e: originE, n: originN } = state.gridOrigin;
+  const inset = FRAME_BAND * dpr;
   for (let i = 0; i <= count; i++) {
     if (i !== count && i % labelEvery !== 0) continue;
-    const value = String(Math.round(200000 + i * step));
-    const x = clamp(i * w / count, 23 * dpr, w - 23 * dpr);
+    const value = String(Math.round(originE + i * step));
+    const x = clamp(i * w / count, 23 * dpr + inset, w - 23 * dpr - inset);
     const width = ctx.measureText(value).width + 5 * dpr;
-    for (const y of [10 * dpr, h - 10 * dpr]) {
+    for (const y of [10 * dpr + inset, h - 10 * dpr - inset]) {
       ctx.fillStyle = 'rgba(253,252,248,.94)';
       ctx.fillRect(x - width / 2, y - 6 * dpr, width, 12 * dpr);
       ctx.fillStyle = '#4e6870';
@@ -445,14 +478,14 @@ function drawGridLabels(ctx, w, h, dpr) {
   }
   for (let i = 0; i <= count; i++) {
     if (i !== count && i % labelEvery !== 0) continue;
-    const value = String(Math.round(600000 + (count - i) * step));
-    const y = clamp(i * h / count, 10 * dpr, h - 10 * dpr);
+    const value = String(Math.round(originN + (count - i) * step));
+    const y = clamp(i * h / count, 10 * dpr + inset, h - 10 * dpr - inset);
     const width = ctx.measureText(value).width + 5 * dpr;
     for (const side of ['left', 'right']) {
       const left = side === 'left';
-      const x = left ? 4 * dpr : w - 4 * dpr;
+      const x = left ? 4 * dpr + inset : w - 4 * dpr - inset;
       ctx.fillStyle = 'rgba(253,252,248,.94)';
-      ctx.fillRect(left ? 0 : w - width, y - 6 * dpr, width, 12 * dpr);
+      ctx.fillRect(left ? inset : w - width - inset, y - 6 * dpr, width, 12 * dpr);
       ctx.fillStyle = '#4e6870';
       ctx.textAlign = left ? 'left' : 'right';
       ctx.fillText(value, x, y);
@@ -628,6 +661,7 @@ function drawMap() {
     drawCourse(mapCtx, state.course, { width: mapCanvas.width, height: mapCanvas.height, dpr: mapDpr });
     mapCtx.restore();
   }
+  drawWaypoints(mapCtx, mapCanvas.width, mapCanvas.height, mapDpr);
   sheepGame?.draw(mapCtx, mapCanvas, mapDpr);
   drawObserver();
   if (!sheepGame?.placing && !state.observer.placing && !state.observerDrag && (!state.observer.firstPerson || state.drawing)) drawBrush();
@@ -674,6 +708,7 @@ function drawPrintBlock(ctx, w, h, dpr, options = {}) {
   drawContours(ctx, w, h, dpr);
   if (options.showCoordinates !== false) drawGridLabels(ctx, w, h, dpr);
   if (options.showFeatures !== false) mapFeatures?.draw2D(ctx, { width: w, height: h }, dpr, false);
+  if (options.showFeatures !== false) drawWaypoints(ctx, w, h, dpr);
 }
 
 // ——— Three.js terrain model ———
@@ -1283,6 +1318,7 @@ function setMapSize(newSize, restoredHeights = null, localSpacing = state.localS
       const q = { u: .5 + (p.u - .5) * k, v: .5 + (p.v - .5) * k };
       return q.u >= 0 && q.u <= 1 && q.v >= 0 && q.v <= 1 ? q : null;
     };
+    state.waypoints = state.waypoints.map(scalePoint).filter(Boolean);
     state.course = {
       start: scalePoint(state.course.start),
       controls: state.course.controls.map(scalePoint).filter(Boolean),
@@ -1351,6 +1387,7 @@ function currentSnapshot() {
     localSpacing: state.localSpacing,
     features: mapFeatures?.serialize() || [],
     course: cloneCourse(state.course),
+    waypoints: state.waypoints.map((p) => ({ ...p })),
   };
 }
 
@@ -1367,6 +1404,10 @@ function restoreSnapshot(snapshot) {
   if (snapshot.course) {
     state.course = sanitizeCourse(snapshot.course);
     updateCourseUI();
+  }
+  if (snapshot.waypoints) {
+    state.waypoints = snapshot.waypoints.map((p) => ({ ...p }));
+    updateWaypointUI();
   }
   scheduleUpdate();
   scheduleSave();
@@ -1400,7 +1441,7 @@ function setTool(tool) {
   const previous = state.tool;
   state.tool = tool;
   if (tool !== 'features' && previous === 'features') mapFeatures?.cancel(true);
-  if (tool === 'pan' || tool === 'features' || tool === 'course' || tool === 'drop') {
+  if (tool === 'pan' || tool === 'features' || tool === 'course' || tool === 'drop' || tool === 'waypoint') {
     state.observer.placing = false;
     sheepGame?.cancelPlacement?.();
     updateObserverUI();
@@ -1421,6 +1462,8 @@ function syncToolUI() {
   $('featureOptions').hidden = tool !== 'features';
   $('courseOptions').hidden = tool !== 'course';
   $('dropOptions').hidden = tool !== 'drop';
+  $('waypointOptions').hidden = tool !== 'waypoint';
+  if (tool === 'waypoint') updateWaypointUI();
   rainSimulation?.setDropMode(tool === 'drop');
   if (tool === 'course') updateCourseUI();
   const label = $('toolMode');
@@ -1572,6 +1615,107 @@ function eventToGrid(event) {
     gx: clamp((event.clientX - rect.left) / rect.width * (N - 1), 0, N - 1),
     gy: clamp((event.clientY - rect.top) / rect.height * (N - 1), 0, N - 1),
   };
+}
+
+// ——— Waypoints (נקודות ציון): a marker and its grid coordinate, read to 100 m ———
+function waypointText(point) {
+  return formatCoordinate(readCoordinate(point.u, point.v, mapExtentMeters(), state.gridOrigin));
+}
+
+function drawWaypoints(ctx, w, h, dpr) {
+  if (!state.waypoints.length) return;
+  ctx.save();
+  ctx.font = `700 ${11 * dpr}px Arial, sans-serif`;
+  ctx.textBaseline = 'middle';
+  state.waypoints.forEach((point, index) => {
+    const x = point.u * w;
+    const y = point.v * h;
+    const r = 6 * dpr;
+    for (const [color, width] of [['#fff', 4], ['#8a3f7d', 2]]) {
+      ctx.strokeStyle = color;
+      ctx.lineWidth = width * dpr;
+      ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.moveTo(x - r * 1.8, y); ctx.lineTo(x - r * .5, y);
+      ctx.moveTo(x + r * .5, y); ctx.lineTo(x + r * 1.8, y);
+      ctx.moveTo(x, y - r * 1.8); ctx.lineTo(x, y - r * .5);
+      ctx.moveTo(x, y + r * .5); ctx.lineTo(x, y + r * 1.8);
+      ctx.stroke();
+    }
+    const text = `${index + 1}  ${waypointText(point)}`;
+    const width = ctx.measureText(text).width + 10 * dpr;
+    // Keep the label inside the map: flip to the left near the east edge.
+    const left = x + r * 2 + width > w - 8 * dpr ? x - r * 2 - width : x + r * 2;
+    const top = clamp(y - 9 * dpr, 8 * dpr, h - 26 * dpr);
+    ctx.fillStyle = 'rgba(255,255,255,.93)';
+    ctx.strokeStyle = '#8a3f7d';
+    ctx.lineWidth = 1.2 * dpr;
+    ctx.beginPath();
+    ctx.roundRect(left, top, width, 18 * dpr, 5 * dpr);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = '#5b2752';
+    ctx.textAlign = 'left';
+    ctx.fillText(text, left + 5 * dpr, top + 9.5 * dpr);
+  });
+  ctx.restore();
+}
+
+function updateWaypointUI(pointer = null) {
+  const live = $('waypointLive');
+  if (pointer) {
+    const point = { u: pointer.gx / (N - 1), v: pointer.gy / (N - 1) };
+    live.textContent = `${waypointText(point)} · ${Math.round(sampleHeight(point.u, point.v))} מ׳`;
+  } else if (state.waypoints.length) {
+    const last = state.waypoints[state.waypoints.length - 1];
+    live.textContent = `${state.waypoints.length}: ${waypointText(last)}`;
+  } else live.textContent = 'העבירו את הסמן על המפה';
+  $('undoWaypointBtn').disabled = !state.waypoints.length;
+  $('clearWaypointsBtn').disabled = !state.waypoints.length;
+}
+
+function addWaypoint(next) {
+  pushUndo();
+  const point = { u: clamp(next.gx / (N - 1), 0, 1), v: clamp(next.gy / (N - 1), 0, 1) };
+  state.waypoints.push(point);
+  if (state.waypoints.length > 40) state.waypoints.shift();
+  updateWaypointUI();
+  drawMap();
+  scheduleSave();
+  showToast(`נקודה ${state.waypoints.length}: נ״צ ${waypointText(point)} (צפון/מזרח) · גובה ${Math.round(sampleHeight(point.u, point.v))} מ׳`);
+}
+
+function removeLastWaypoint() {
+  if (!state.waypoints.length) return;
+  pushUndo();
+  state.waypoints.pop();
+  updateWaypointUI();
+  drawMap();
+  scheduleSave();
+}
+
+function clearWaypoints() {
+  if (!state.waypoints.length) return;
+  pushUndo();
+  state.waypoints = [];
+  updateWaypointUI();
+  drawMap();
+  scheduleSave();
+  showToast('נקודות הציון נמחקו.', { action: { label: 'ביטול', run: undo } });
+}
+
+// ——— Grid origin (the "#" card in the map footer) ———
+function syncGridOriginInputs() {
+  $('gridOriginE').value = String(state.gridOrigin.e);
+  $('gridOriginN').value = String(state.gridOrigin.n);
+}
+
+function setGridOrigin(origin, message = true) {
+  state.gridOrigin = sanitizeOrigin(origin);
+  syncGridOriginInputs();
+  drawMap();
+  updateWaypointUI();
+  scheduleSave();
+  if (message) showToast(`רשת הקואורדינטות מתחילה עכשיו ב־${state.gridOrigin.n}/${state.gridOrigin.e} (צפון/מזרח) בפינה הדרומית־מערבית.`);
 }
 
 // ——— Orienteering course planning (course tool) ———
@@ -1819,6 +1963,10 @@ mapCanvas.addEventListener('pointerdown', (event) => {
     rainSimulation?.handleMapClick(next.gx, next.gy);
     return;
   }
+  if (state.tool === 'waypoint') {
+    addWaypoint(next);
+    return;
+  }
   if (state.tool === 'course') {
     handleCoursePointerDown(next, event);
     return;
@@ -1892,6 +2040,10 @@ mapCanvas.addEventListener('pointermove', (event) => {
   updatePointReadout(next, event);
   if (state.tool === 'drop') {
     rainSimulation?.handleMapHover(next.gx, next.gy);
+    return;
+  }
+  if (state.tool === 'waypoint') {
+    updateWaypointUI(next);
     return;
   }
   if (courseDrag) {
@@ -2022,8 +2174,18 @@ mapCanvas.addEventListener('dblclick', (event) => {
   mapFeatures.handleDoubleClick();
 });
 
+let wheelBrushDelta = 0;
 $('mapWrap').addEventListener('wheel', (event) => {
   event.preventDefault();
+  // Ctrl (⌘) + wheel resizes the brush instead of zooming the map.
+  if (event.ctrlKey || event.metaKey) {
+    wheelBrushDelta += event.deltaY;
+    if (Math.abs(wheelBrushDelta) < 30) return;
+    setBrushSize(wheelBrushDelta < 0 ? Math.max(state.brush + 5, state.brush * 1.12) : Math.min(state.brush - 5, state.brush / 1.12));
+    wheelBrushDelta = 0;
+    if (state.pointer) updatePointReadout(state.pointer);
+    return;
+  }
   wheelZoomDelta += event.deltaY;
   if (Math.abs(wheelZoomDelta) < 35) return;
   stepMapZoom(wheelZoomDelta < 0 ? 1 : -1, event.clientX, event.clientY);
@@ -2034,6 +2196,11 @@ $('mapWrap').addEventListener('wheel', (event) => {
 // Enter applies the current tool. In pan mode the arrows move the map instead.
 mapCanvas.addEventListener('keydown', (event) => {
   if (state.tool === 'features' && mapFeatures?.handleKey(event)) return;
+  if (state.tool === 'waypoint' && (event.key === 'Backspace' || event.key === 'Delete')) {
+    event.preventDefault();
+    removeLastWaypoint();
+    return;
+  }
   if (state.tool === 'course' && (event.key === 'Backspace' || event.key === 'Delete')) {
     event.preventDefault();
     removeLastCoursePoint();
@@ -2504,6 +2671,13 @@ $('randomCourseBtn').addEventListener('click', () => {
   setCourse({ start: generated.start, controls: generated.controls, finish: null }, `נוצר מסלול של ${count} נקודות. אפשר לגרור נקודות כדי לשנות.`);
 });
 $('undoCourseBtn').addEventListener('click', removeLastCoursePoint);
+$('undoWaypointBtn').addEventListener('click', removeLastWaypoint);
+$('clearWaypointsBtn').addEventListener('click', clearWaypoints);
+syncGridOriginInputs();
+const applyGridOriginInputs = () => setGridOrigin({ e: Number($('gridOriginE').value), n: Number($('gridOriginN').value) });
+$('gridOriginApply').addEventListener('click', applyGridOriginInputs);
+for (const id of ['gridOriginE', 'gridOriginN']) $(id).addEventListener('keydown', (event) => { if (event.key === 'Enter') applyGridOriginInputs(); });
+$('gridOriginReset').addEventListener('click', () => setGridOrigin(DEFAULT_ORIGIN));
 $('clearCourseBtn').addEventListener('click', () => setCourse(emptyCourse(), 'המסלול נמחק.'));
 $('startNavBtn').addEventListener('click', openNavigation);
 $('navBtn').addEventListener('click', openNavigation);
@@ -2555,6 +2729,7 @@ initShortcuts({
   'tool-features': () => setTool('features'),
   'tool-course': () => setTool('course'),
   'tool-drop': () => setTool('drop'),
+  'tool-waypoint': () => setTool('waypoint'),
   'open-navigation': () => openNavigation(),
   'toggle-topo': () => setTopo(!state.topo),
   'toggle-rain': () => rainSimulation?.toggle(),
@@ -2607,9 +2782,11 @@ function collectProject() {
       interval: state.interval,
       scale: state.scale,
       exaggeration: state.exaggeration,
+      gridOrigin: { ...state.gridOrigin },
     },
     features: mapFeatures?.serialize() || [],
     course: cloneCourse(state.course),
+    waypoints: state.waypoints.map((p) => ({ ...p })),
   };
 }
 
@@ -2646,6 +2823,11 @@ function restoreProject(saved) {
   }
   mapFeatures?.load(saved.features);
   state.course = sanitizeCourse(saved.course);
+  state.waypoints = Array.isArray(saved.waypoints)
+    ? saved.waypoints.filter((p) => Number.isFinite(p?.u) && Number.isFinite(p?.v)).map((p) => ({ u: clamp(p.u, 0, 1), v: clamp(p.v, 0, 1) })).slice(0, 40)
+    : [];
+  state.gridOrigin = sanitizeOrigin(settings.gridOrigin);
+  syncGridOriginInputs();
   updateCourseUI();
   setTopo(Boolean(settings.topo));
   scheduleUpdate();
@@ -2695,6 +2877,7 @@ function resetMap({ terrain = false, features = false, course = false }) {
   if (terrain) heights.fill(0);
   if (features) mapFeatures?.clearAll();
   if (course) { state.course = emptyCourse(); updateCourseUI(); }
+  if (all) state.waypoints = [];
   hideCursorReadout();
   scheduleUpdate();
   scheduleSave();

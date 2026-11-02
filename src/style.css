@@ -869,3 +869,17 @@ body.navigating .scene-panel .scene-viewport { flex: 1 1 auto; min-height: 0; as
   .water-info .info-dismiss { display: none; }
 }
 .water-dock-bottom .water-info.floating { position: fixed; z-index: 60; bottom: auto; transform: none; }
+
+/* Waypoint (נ״צ) tool and grid settings */
+.rail-waypoint { color: #7a3b6f; }
+#waypointBtn[aria-pressed='true'] { color: #fff; background: #8a3f7d; border-color: #8a3f7d; }
+.options-tool.waypoint { color: #7a3b6f; background: #f3e1ef; }
+.waypoint-live { min-width: 150px; color: var(--ink); font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums; direction: ltr; text-align: right; }
+.waypoint-options .footer-button { min-height: 30px; padding: 0 9px; font-size: 11px; }
+.waypoint-options .waypoint-hint { display: block; margin-inline-start: 0; white-space: normal; flex-basis: 100%; }
+.grid-settings summary { font-size: 13px; }
+.grid-settings-card { position: absolute; z-index: 20; bottom: calc(100% + 8px); inset-inline-start: -8px; width: 250px; padding: 12px; display: grid; gap: 8px; color: var(--ink); background: var(--panel); border: 1px solid var(--line-strong); border-radius: 10px; box-shadow: 0 12px 30px rgb(24 51 42 / 18%); font-size: 12px; }
+.grid-settings-card p { position: static; width: auto; margin: 0; padding: 0; border: 0; box-shadow: none; color: var(--ink-soft); font-size: 11px; line-height: 1.4; background: none; }
+.grid-settings-card label { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.grid-settings-card input { width: 120px; padding: 4px 6px; border: 1px solid var(--line-strong); border-radius: 6px; direction: ltr; font-variant-numeric: tabular-nums; }
+.grid-settings-actions { display: flex; gap: 6px; }
