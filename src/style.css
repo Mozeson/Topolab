@@ -203,6 +203,7 @@ body.resizing-panels { user-select: none; cursor: col-resize; }
 .map-wrap { position: relative; flex: 1; min-height: 0; overflow: hidden; background: #e5e8e0; isolation: isolate; }
 .map-surface { position: absolute; z-index: 1; left: 50%; top: 50%; transform: translate(-50%, -50%); will-change: width, height, transform; }
 .map-surface canvas { display: block; width: 100%; height: 100%; outline: 1px solid #7f8d7b; }
+.map-surface canvas.rain-trails { position: absolute; inset: 0; outline: 0; pointer-events: none; }
 #mapCanvas { touch-action: none; cursor: crosshair; }
 #mapCanvas.placing-observer { cursor: cell; }
 #mapCanvas.pan-mode { cursor: grab; }
@@ -229,6 +230,9 @@ body.resizing-panels { user-select: none; cursor: col-resize; }
 .rain-amount input { width: 100%; accent-color: #1f78a8; }
 .rain-amount output { min-width: 112px; font-size: 11px; text-align: left; font-variant-numeric: tabular-nums; }
 .rain-status { font-size: 11px; font-weight: 600; line-height: 1.45; text-align: center; }
+.rain-legend { margin: 0; display: flex; align-items: center; justify-content: center; gap: 6px; color: #3b6d86; font-size: 10px; line-height: 1.4; text-align: center; }
+.rain-legend i { width: 18px; height: 0; flex: 0 0 auto; border-top: 2px solid #1260a8; border-radius: 2px; }
+@media (max-width: 560px) { .rain-legend { display: none; } }
 .feature-legend { position: absolute; z-index: 4; left: 50%; bottom: 14px; transform: translateX(-50%); max-width: min(55%, 520px); padding: 5px 8px; display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 5px 10px; color: #31423d; background: rgb(252 251 244 / 90%); border: 1px solid rgb(68 92 83 / 18%); border-radius: 10px; box-shadow: 0 3px 12px rgb(27 51 42 / 12%); font-size: 9px; pointer-events: none; }
 .feature-legend-item { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
 .feature-legend-item i { width: 25px; height: 7px; display: block; }

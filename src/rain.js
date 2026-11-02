@@ -7,6 +7,7 @@
 //   'flowing'  — the steady state: streams keep flowing (scrolling texture) until cleared.
 // See docs/RAIN.md.
 import { analyzeTerrain, simulateRain } from './hydrology.js';
+import { createRunoff } from './runoff.js';
 import { contours } from 'd3-contour';
 import * as THREE from 'three';
 
@@ -94,6 +95,15 @@ export function createRainSimulation(api) {
   let growth = 0;        // 0..1 during 'raining'
   let lastMapDraw = 0;
   let world = null;      // 3D objects
+  let runoff = null;     // flowing droplets (runoff.js)
+  // Trails are painted on their own canvas layered over the map, so the terrain is not
+  // redrawn every frame; old trail pixels fade a little each frame.
+  const trailCanvas = document.createElement('canvas');
+  trailCanvas.className = 'rain-trails';
+  trailCanvas.setAttribute('aria-hidden', 'true');
+  document.getElementById('mapSurface')?.appendChild(trailCanvas);
+  const trailCtx = trailCanvas.getContext('2d');
+  const MAX_DROPS = 2200;
   let flowTexture = null;
 
   function updateUI(message = '') {
@@ -353,8 +363,18 @@ export function createRainSimulation(api) {
       lakeMeshes.push(mesh);
     }
 
+    // Runoff drops: a short bright streak per drop, lying on the ground.
+    const dropPositions = new Float32Array(MAX_DROPS * 6);
+    const dropGeometry = new THREE.BufferGeometry();
+    dropGeometry.setAttribute('position', new THREE.BufferAttribute(dropPositions, 3).setUsage(THREE.DynamicDrawUsage));
+    dropGeometry.setDrawRange(0, 0);
+    const dropLines = new THREE.LineSegments(dropGeometry, new THREE.LineBasicMaterial({ color: 0xcff0ff, transparent: true, opacity: .95, depthTest: true }));
+    dropLines.frustumCulled = false;
+    dropLines.renderOrder = 5;
+    group.add(dropLines);
+
     scene.add(group);
-    return { group, streaks, drops, ribbons, lakeMeshes, vs, materials: [streamMaterial, lakeMaterial, streaks.material] };
+    return { group, streaks, drops, dropLines, ribbons, lakeMeshes, vs, materials: [streamMaterial, lakeMaterial, streaks.material, dropLines.material] };
   }
 
   function disposeWorld() {
@@ -399,6 +419,27 @@ export function createRainSimulation(api) {
       const { bottom, level } = lake.userData;
       lake.position.y = (bottom + (level - bottom) * clamp(p * 1.1, 0, 1)) * vs + .004 * W / 10;
     }
+    if (runoff && world.dropLines) {
+      const n = runoff.size;
+      const surface = api.surfaceHeight || api.height;
+      const lift = .006 * W / 10;
+      const arr = world.dropLines.geometry.attributes.position.array;
+      let k = 0;
+      for (const p of runoff.particles) {
+        if (!p.alive || p.fresh) continue;
+        // Streak from where the drop was ~0.4 s ago to where it is now.
+        const tx = Math.max(0, Math.min(n - 1, p.x - p.vx * .4));
+        const ty = Math.max(0, Math.min(n - 1, p.y - p.vy * .4));
+        const hu = p.x / (n - 1);
+        const hv = p.y / (n - 1);
+        const tu = tx / (n - 1);
+        const tv = ty / (n - 1);
+        arr[k++] = (tu - .5) * W; arr[k++] = surface(tu, tv) * vs + lift; arr[k++] = (tv - .5) * W;
+        arr[k++] = (hu - .5) * W; arr[k++] = surface(hu, hv) * vs + lift; arr[k++] = (hv - .5) * W;
+      }
+      world.dropLines.geometry.setDrawRange(0, k / 3);
+      world.dropLines.geometry.attributes.position.needsUpdate = true;
+    }
     if (flowTexture) flowTexture.offset.x -= dt * .9;
     api.invalidate();
   }
@@ -424,6 +465,39 @@ export function createRainSimulation(api) {
     return parts.join(' · ');
   }
 
+  // ——— 2D trails ———
+  function paintTrails() {
+    const mapCanvas = document.getElementById('mapCanvas');
+    if (!mapCanvas || !runoff) return;
+    if (trailCanvas.width !== mapCanvas.width || trailCanvas.height !== mapCanvas.height) {
+      trailCanvas.width = mapCanvas.width;
+      trailCanvas.height = mapCanvas.height;
+    }
+    const w = trailCanvas.width;
+    const h = trailCanvas.height;
+    const n = runoff.size;
+    const dpr = w / Math.max(1, mapCanvas.getBoundingClientRect().width || w);
+    // Fade what is already there, then add this frame's movement.
+    trailCtx.globalCompositeOperation = 'destination-out';
+    trailCtx.fillStyle = 'rgba(0,0,0,.09)';
+    trailCtx.fillRect(0, 0, w, h);
+    trailCtx.globalCompositeOperation = 'source-over';
+    trailCtx.lineCap = 'round';
+    trailCtx.lineWidth = 1.7 * dpr;
+    trailCtx.strokeStyle = 'rgba(18,96,168,.9)';
+    trailCtx.beginPath();
+    for (const p of runoff.particles) {
+      if (!p.alive || p.fresh) continue;
+      trailCtx.moveTo(p.px / (n - 1) * w, p.py / (n - 1) * h);
+      trailCtx.lineTo(p.x / (n - 1) * w, p.y / (n - 1) * h);
+    }
+    trailCtx.stroke();
+  }
+
+  function clearTrails() {
+    trailCtx.clearRect(0, 0, trailCanvas.width, trailCanvas.height);
+  }
+
   // ——— Lifecycle ———
   function tick(now) {
     if (!active) return;
@@ -441,6 +515,12 @@ export function createRainSimulation(api) {
         api.redraw();
       }
     }
+    if (runoff && dt > 0) {
+      // Small fixed sub-steps keep trails smooth even when a frame is slow.
+      const steps = Math.ceil(dt / .03);
+      for (let k = 0; k < steps; k++) runoff.step(dt / steps);
+      paintTrails();
+    }
     update3D(dt);
     frameId = requestAnimationFrame(tick);
   }
@@ -453,6 +533,10 @@ export function createRainSimulation(api) {
     const extent = api.extent ? api.extent() : 4000;
     const cellArea = (extent / (base.size - 1)) ** 2;
     model = { ...base, ...simulateRain(base, { rainMeters: rainMeters(), cellArea }) };
+    // More rain, more drops on the slopes (drizzle ≈ 500, unlimited ≈ 2200).
+    const mm = rainMeters() * 1000;
+    const drops = Number.isFinite(mm) ? Math.round(Math.min(MAX_DROPS, 350 + Math.log10(Math.max(5, mm)) * 520)) : MAX_DROPS;
+    runoff = createRunoff({ size: base.size, surface: base.filled, wet: model.wet, cellMeters: extent / (base.size - 1), count: drops, seed: 11 });
     buildPaths();
     buildLakeShapes();
     disposeWorld();
@@ -482,7 +566,7 @@ export function createRainSimulation(api) {
     growth = 0;
     lastTime = 0;
     lastMapDraw = 0;
-    updateUI('יורד גשם… המים מתחילים לזרום במורד');
+    updateUI('יורד גשם… כל טיפה זורמת במורד התלול ביותר, אל הערוצים והשקעים');
     cancelAnimationFrame(frameId);
     frameId = requestAnimationFrame(tick);
     api.redraw();
@@ -493,6 +577,8 @@ export function createRainSimulation(api) {
     phase = 'idle';
     cancelAnimationFrame(frameId);
     disposeWorld();
+    runoff = null;
+    clearTrails();
     base = null;
     model = null;
     paths = [];
@@ -515,6 +601,7 @@ export function createRainSimulation(api) {
       fullLakes: model?.lakes.filter((l) => l.wetCells > 0 && l.full).length || 0,
       rainMm: Number.isFinite(rainMeters()) ? Math.round(rainMeters() * 1000) : 'unlimited',
       streams: model?.streams.length || 0,
+      drops: runoff ? runoff.particles.filter((p) => p.alive).length : 0,
       outlets: model?.outlets.length || 0,
       biggestLakeDepth: model?.lakes.length ? Math.max(0, ...model.lakes.map((l) => l.wetDepth || 0)) : 0,
     };
