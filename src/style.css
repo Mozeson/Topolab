@@ -898,3 +898,25 @@ body.navigating .scene-panel .scene-viewport { flex: 1 1 auto; min-height: 0; as
 .nav-grid-list strong { width: 100%; font-size: 11px; color: #c6dccd; }
 .nav-grid-list span { direction: ltr; }
 .nav-grid-list b { display: inline-grid; place-items: center; width: 18px; height: 18px; margin-right: 4px; color: #fff; background: #c2187a; border-radius: 50%; font-size: 10px; }
+
+/* ——— 3D view: compass and layers ——— */
+.scene-viewport { background: linear-gradient(#a9c6dd, #dbe6e6 55%, #eef0e6); }
+.view-layers { position: absolute; top: 46px; left: 0; z-index: 8; width: 210px; padding: 10px 12px; display: grid; gap: 7px; color: var(--ink); background: rgb(251 250 244 / 96%); border: 1px solid var(--line-strong); border-radius: 12px; box-shadow: 0 10px 28px rgb(24 51 42 / 18%); font-size: 12px; direction: rtl; }
+.view-layers strong { font-size: 13px; }
+.view-layers label { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.view-layers input { width: 16px; height: 16px; accent-color: var(--forest-2); }
+#viewLayersBtn[aria-expanded='true'] { color: #fff; background: var(--forest-2); }
+.view-compass { position: absolute; z-index: 3; top: 10px; right: 10px; width: 92px; height: 92px; }
+.view-compass-rose { position: absolute; inset: 14px; transition: transform 120ms linear; }
+.view-compass-rose svg { width: 100%; height: 100%; overflow: visible; }
+.view-compass-rose circle { fill: rgb(249 250 243 / 82%); stroke: rgb(36 75 64 / 35%); stroke-width: 2; }
+.view-compass-rose .needle-n { fill: #c8452f; }
+.view-compass-rose .needle-s { fill: #e9ece4; stroke: #8a978f; stroke-width: 1; }
+.view-compass-rose text { fill: #c8452f; font: 700 10px Heebo, Arial, sans-serif; text-anchor: middle; }
+.view-compass button { position: absolute; width: 26px; height: 22px; padding: 0; color: #244b40; background: rgb(249 250 243 / 88%); border: 1px solid rgb(36 75 64 / 22%); border-radius: 7px; font: 700 10px/1 Heebo, Arial, sans-serif; }
+.view-compass button:hover { color: #fff; background: var(--forest-2); }
+.view-compass .vc-n { top: 0; left: 33px; }
+.view-compass .vc-s { bottom: 0; left: 33px; }
+.view-compass .vc-e { top: 35px; right: 0; }
+.view-compass .vc-w { top: 35px; left: 0; }
+body.navigating .view-compass { display: none; }

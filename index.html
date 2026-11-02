@@ -78,12 +78,32 @@
             <span>טוען תצוגה תלת־ממדית…</span>
           </div>
           <div class="scene-tools">
-            <button class="glass-button" id="resetCameraBtn" type="button" title="איפוס זווית" aria-label="איפוס זווית התצוגה">
+            <button class="glass-button" id="resetCameraBtn" type="button" title="מבט אלכסוני (איפוס)" aria-label="מבט אלכסוני, איפוס הזווית">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 1 0 2.3-5.7L4 8.6M4 4v4.6h4.6"/></svg>
             </button>
-            <button class="glass-button" id="topCameraBtn" type="button" title="מבט מלמעלה" aria-label="מבט מלמעלה">
+            <button class="glass-button" id="topCameraBtn" type="button" title="מבט מלמעלה — כמו המפה" aria-label="מבט מלמעלה">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2"/><path d="M12 1v3M12 20v3" opacity=".6"/><circle cx="12" cy="12" r="2.5"/></svg>
+            </button>
+            <button class="glass-button" id="viewLayersBtn" type="button" title="שכבות התצוגה" aria-label="שכבות התצוגה" aria-expanded="false" aria-controls="viewLayersPanel">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 9 5-9 5-9-5 9-5Z"/><path d="m5 12 7 4 7-4M5 16l7 4 7-4"/></svg>
             </button>
+            <div class="view-layers" id="viewLayersPanel" hidden>
+              <strong>שכבות בתצוגה</strong>
+              <label><input type="checkbox" data-view3d="contours"> קווי גובה על הדגם</label>
+              <label><input type="checkbox" data-view3d="grid"> רשת הקואורדינטות</label>
+              <label><input type="checkbox" data-view3d="strata"> שכבות סלע בצדי הדגם</label>
+              <label><input type="checkbox" data-view3d="shadows"> צללים</label>
+              <label><input type="checkbox" data-view3d="autoRotate"> סיבוב אוטומטי</label>
+            </div>
+          </div>
+          <div class="view-compass" role="group" aria-label="כיוון התצוגה">
+            <div class="view-compass-rose" id="viewCompassRose" aria-hidden="true">
+              <svg viewBox="0 0 64 64"><circle cx="32" cy="32" r="29"/><path class="needle-n" d="M32 8 38 32H26Z"/><path class="needle-s" d="M32 56 26 32h12Z"/><text x="32" y="6.5">צ</text></svg>
+            </div>
+            <button type="button" data-view-facing="north" class="vc-n" title="צפון למעלה — כמו במפה">צ</button>
+            <button type="button" data-view-facing="east" class="vc-e" title="מזרח למעלה">מז</button>
+            <button type="button" data-view-facing="south" class="vc-s" title="דרום למעלה">ד</button>
+            <button type="button" data-view-facing="west" class="vc-w" title="מערב למעלה">מע</button>
           </div>
           <div class="orbit-hint" id="orbitHint">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 11V7a2 2 0 0 1 4 0v4-6a2 2 0 0 1 4 0v7-3a2 2 0 0 1 4 0v6c0 4-3 6-7 6-3 0-5-2-7-5l-3-4a2 2 0 0 1 3-2l2 1Z"/></svg>

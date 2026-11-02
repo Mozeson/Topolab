@@ -29,7 +29,7 @@ const BASE_Y = -4.15;
 // Plinth under the terrain model. Sized for the 4 km world and shrunk for smaller maps
 // so the 1 km model doesn't sit on a slab a seventh of its width (6/8 km are unchanged).
 const plinthScale = () => Math.min(1, WORLD_SIZE / 10);
-const plinthBox = () => new THREE.BoxGeometry(WORLD_SIZE + .12 * plinthScale(), .36 * plinthScale(), WORLD_SIZE + .12 * plinthScale());
+const plinthBox = () => new THREE.BoxGeometry(WORLD_SIZE + .05 * plinthScale(), .12 * plinthScale(), WORLD_SIZE + .05 * plinthScale());
 const EYE_HEIGHT_METERS = 1.7;
 const NAV_EYE_HEIGHT_METERS = 2.1; // a little above head height: the game view felt ground-hugging
 const OBSERVER_FOV = 65;
@@ -729,6 +729,13 @@ let skirtMesh;
 let sunLight;
 const sceneContainer = $('sceneContainer');
 const defaultCamera = new THREE.Vector3(13.6, 11.2, 14.8);
+// "מבט במרחב" display layers (the layers popover over the 3D view), saved per browser.
+const VIEW3D_KEY = 'topolab-view3d';
+const view3d = { contours: false, grid: false, strata: true, shadows: true, autoRotate: false };
+try { Object.assign(view3d, JSON.parse(localStorage.getItem(VIEW3D_KEY) || '{}')); } catch { /* storage unavailable */ }
+let shadowCatcher = null;
+let fillLight = null;
+let skirtUniforms = null;
 const defaultTarget = new THREE.Vector3(0, -0.45, 0);
 let savedOrbitPosition = null;
 let savedOrbitTarget = null;
@@ -777,6 +784,47 @@ function createTerrainGeometry() {
   return geometry;
 }
 
+// The model's sides look like a geology block model: horizontal rock layers of varying
+// thickness and colour, fixed in metres so they line up all the way round.
+function installStrataShader(material) {
+  skirtUniforms = { uStrata: { value: 1 }, uWorldToMeters: { value: 400 }, uVerticalScale: { value: 1.6 } };
+  material.onBeforeCompile = (shader) => {
+    Object.assign(shader.uniforms, skirtUniforms);
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vSidePos;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvSidePos = position;');
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', `#include <common>
+        varying vec3 vSidePos;
+        uniform float uStrata;
+        uniform float uWorldToMeters;
+        uniform float uVerticalScale;
+        float sideHash(float n) { return fract(sin(n * 91.345) * 47453.5453); }
+      `)
+      .replace('#include <color_fragment>', `#include <color_fragment>
+        if (uStrata > 0.5) {
+          // Depth in real metres (undo the vertical exaggeration), with a gentle tilt.
+          float along = vSidePos.x + vSidePos.z;
+          float m = vSidePos.y * uWorldToMeters / uVerticalScale + along * uWorldToMeters * 0.004;
+          float layer = floor(m / 22.0);
+          float within = fract(m / 22.0);
+          float pick = sideHash(layer);
+          vec3 a = vec3(0.80, 0.70, 0.55);
+          vec3 b = vec3(0.67, 0.53, 0.40);
+          vec3 c = vec3(0.86, 0.80, 0.68);
+          vec3 d = vec3(0.55, 0.47, 0.40);
+          vec3 rock = pick < 0.3 ? a : pick < 0.55 ? b : pick < 0.8 ? c : d;
+          rock *= 0.9 + 0.1 * smoothstep(0.0, 0.12, within) * smoothstep(1.0, 0.85, within);
+          diffuseColor.rgb = rock;
+        }
+      `)
+      // The south and east sides face away from the north-west sun; a little self-light
+      // keeps the layers readable from every side.
+      .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += diffuseColor.rgb * 0.38 * uStrata;');
+  };
+  material.customProgramCacheKey = () => 'skirt-strata-v2';
+}
+
 function createSkirtGeometry() {
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(perimeter.length * 18), 3).setUsage(THREE.DynamicDrawUsage));
@@ -788,6 +836,9 @@ function installContourShader(material) {
     uContours: { value: 0 },
     uInterval: { value: state.interval },
     uDetail: { value: 0 },          // 1 in the navigation game: ground texture for a sense of speed
+    uGrid: { value: 0 },            // 1: the map's coordinate grid draped over the model
+    uGridCell: { value: 1.25 },     // grid square size in world units
+    uHalfWorld: { value: 5 },
     uWorldToMeters: { value: 400 },
   };
   material.onBeforeCompile = (shader) => {
@@ -803,6 +854,9 @@ function installContourShader(material) {
         uniform float uInterval;
         uniform float uDetail;
         uniform float uWorldToMeters;
+        uniform float uGrid;
+        uniform float uGridCell;
+        uniform float uHalfWorld;
         float groundHash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
         float groundNoise(vec2 p) {
           vec2 i = floor(p); vec2 f = fract(p); f = f * f * (3.0 - 2.0 * f);
@@ -817,8 +871,17 @@ function installContourShader(material) {
           diffuseColor.rgb *= .82 + n * .34;
           diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(1.08, 1.02, .82), patches * .35);
         }
+        if (uGrid > 0.5) {
+          vec2 g = (vGroundXZ + uHalfWorld) / uGridCell;
+          vec2 gw = max(fwidth(g), vec2(0.0001));
+          vec2 gd = abs(fract(g + 0.5) - 0.5) / gw;
+          float gridLine = 1.0 - smoothstep(0.6, 1.6, min(gd.x, gd.y));
+          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.16, 0.27, 0.36), gridLine * 0.55);
+        }
         if (uContours > 0.5) {
           float coord = vTerrainHeight / uInterval;
+          // Perfectly flat ground lying exactly on a contour level is not a line.
+          float hasSlope = step(1e-5, fwidth(vTerrainHeight));
           float fw = max(fwidth(coord), 0.0001);
           float distToLine = abs(fract(coord + 0.5) - 0.5);
           float line = 1.0 - smoothstep(fw * 0.35, fw * 1.35, distToLine);
@@ -826,12 +889,12 @@ function installContourShader(material) {
           float majorFw = max(fwidth(majorCoord), 0.0001);
           float majorDist = abs(fract(majorCoord + 0.5) - 0.5);
           float majorLine = 1.0 - smoothstep(majorFw * 0.35, majorFw * 1.25, majorDist);
-          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.24, 0.22, 0.15), line * 0.62);
-          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.16, 0.17, 0.12), majorLine * 0.78);
+          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.24, 0.22, 0.15), line * 0.62 * hasSlope);
+          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.16, 0.17, 0.12), majorLine * 0.78 * hasSlope);
         }
       `);
   };
-  material.customProgramCacheKey = () => 'terrain-contour-v2';
+  material.customProgramCacheKey = () => 'terrain-contour-v4';
 }
 
 function initThree() {
@@ -849,8 +912,8 @@ function initThree() {
     sceneContainer.prepend(renderer.domElement);
 
     scene = new THREE.Scene();
-    scene.background = new THREE.Color(0xdfe6da);
-    scene.fog = new THREE.Fog(0xdfe6da, 31, 72);
+    scene.background = makeSkyTexture();
+    scene.fog = new THREE.Fog(0xe4ebe3, 31, 72);
     camera = new THREE.PerspectiveCamera(43, 1, 0.1, 180);
     camera.position.copy(defaultCamera);
 
@@ -866,11 +929,16 @@ function initThree() {
     controls.addEventListener('change', () => { needsRender = true; });
     controls.update();
 
-    scene.add(new THREE.HemisphereLight(0xf4f3df, 0x526451, 1.45));
-    sunLight = new THREE.DirectionalLight(0xfff3da, 2.15);
-    sunLight.position.set(-9, 16, 10);
+    // Cartographic lighting: the sun from the north-west (north is -z), fairly low so the
+    // relief reads clearly, plus a soft sky fill and a faint counter-light from the south-east.
+    scene.add(new THREE.HemisphereLight(0xf2f5ff, 0x5a6650, 1.15));
+    fillLight = new THREE.DirectionalLight(0xdfe8ff, .35);
+    fillLight.position.set(10, 8, 9);
+    scene.add(fillLight);
+    sunLight = new THREE.DirectionalLight(0xfff1d6, 2.6);
+    sunLight.position.set(-10, 13, -9);
     sunLight.castShadow = true;
-    sunLight.shadow.mapSize.set(1536, 1536);
+    sunLight.shadow.mapSize.set(2048, 2048);
     sunLight.shadow.camera.left = -10;
     sunLight.shadow.camera.right = 10;
     sunLight.shadow.camera.top = 10;
@@ -883,15 +951,19 @@ function initThree() {
 
     groundMesh = new THREE.Mesh(
       new THREE.CircleGeometry(150, 80).rotateX(-Math.PI / 2),
-      new THREE.MeshStandardMaterial({ color: 0xcbd5c5, roughness: 1 }),
+      new THREE.MeshStandardMaterial({ color: 0xd9e0d3, roughness: 1 }),
     );
     groundMesh.position.y = BASE_Y - .05;
-    groundMesh.receiveShadow = true;
+    groundMesh.visible = false; // the navigation game shows it; the model view uses a shadow only
     scene.add(groundMesh);
+    // A soft shadow under the model instead of a grey floor.
+    shadowCatcher = new THREE.Mesh(new THREE.PlaneGeometry(200, 200).rotateX(-Math.PI / 2), new THREE.ShadowMaterial({ opacity: .22 }));
+    shadowCatcher.receiveShadow = true;
+    scene.add(shadowCatcher);
 
     baseMesh = new THREE.Mesh(
       plinthBox(),
-      new THREE.MeshStandardMaterial({ color: 0x40564a, roughness: .96 }),
+      new THREE.MeshStandardMaterial({ color: 0x3b3a35, roughness: .7, metalness: .05 }),
     );
     baseMesh.position.y = BASE_Y - .18;
     baseMesh.castShadow = true;
@@ -907,7 +979,9 @@ function initThree() {
     scene.add(terrainMesh);
 
     skirtGeometry = createSkirtGeometry();
-    skirtMesh = new THREE.Mesh(skirtGeometry, new THREE.MeshStandardMaterial({ color: 0x62705a, roughness: 1 }));
+    const skirtMaterial = new THREE.MeshStandardMaterial({ color: 0x8a7a63, roughness: 1, side: THREE.DoubleSide }); // side walls face both ways
+    installStrataShader(skirtMaterial);
+    skirtMesh = new THREE.Mesh(skirtGeometry, skirtMaterial);
     skirtMesh.castShadow = true;
     skirtMesh.receiveShadow = true;
     scene.add(skirtMesh);
@@ -915,7 +989,9 @@ function initThree() {
     const resizeObserver = new ResizeObserver(resizeThree);
     resizeObserver.observe(sceneContainer);
     resizeThree();
+    applyView3d();
     updateTerrain();
+    resetCamera();
     let lastFrameTime = performance.now();
     renderer.setAnimationLoop(() => {
       const now = performance.now();
@@ -928,6 +1004,7 @@ function initThree() {
         if (axes?.active) applyNavigation(axes, dt);
       }
       const moved = state.observer.firstPerson ? false : controls.update();
+      if (moved || needsRender) updateCompass();
       if (moved || needsRender) {
         renderer.render(scene, camera);
         needsRender = false;
@@ -998,9 +1075,11 @@ function updateSkirt() {
   const array = skirtGeometry.attributes.position.array;
   const { min } = terrainStats();
   const k = plinthScale();
-  const bottom = Math.min(-0.55 * k, min * metersToWorld() * state.exaggeration - 0.35 * k);
-  if (baseMesh) baseMesh.position.y = bottom - 0.18 * k;
+  // A deep block so the rock layers on the sides are visible (geology block-model look).
+  const bottom = Math.min(-1.1 * k, min * metersToWorld() * state.exaggeration - .9 * k);
+  if (baseMesh) baseMesh.position.y = bottom - 0.06 * k;
   if (groundMesh) groundMesh.position.y = bottom - 0.24 * k;
+  if (shadowCatcher) shadowCatcher.position.y = bottom - 0.12 * k - .002;
   let offset = 0;
   const put = (x, y, z) => { array[offset++] = x; array[offset++] = y; array[offset++] = z; };
   for (let i = 0; i < perimeter.length; i += 2) {
@@ -1018,8 +1097,25 @@ function updateSkirt() {
   skirtGeometry.computeBoundingSphere();
 }
 
+// Relief-model shading baked into the vertex colours: valleys a little darker, ridges a
+// little lighter (curvature), and bare rock showing on steep slopes.
+const ROCK = [.62, .57, .5];
+function reliefShade(i, cellM) {
+  const x = i % N;
+  const y = (i - x) / N;
+  const h = heights[i];
+  const left = heights[y * N + Math.max(0, x - 1)];
+  const right = heights[y * N + Math.min(N - 1, x + 1)];
+  const up = heights[Math.max(0, y - 1) * N + x];
+  const down = heights[Math.min(N - 1, y + 1) * N + x];
+  const curvature = (left + right + up + down - 4 * h) / cellM; // > 0 in valleys
+  const slope = Math.hypot(right - left, down - up) / (2 * cellM);
+  return { shade: clamp(1 - curvature * 1.6, .8, 1.08), rock: clamp((slope - .28) / .35, 0, .7) };
+}
+
 function updateTerrain() {
   if (!terrainGeometry) return;
+  const cellM = mapExtentMeters() / (N - 1);
   const positions = terrainGeometry.attributes.position;
   const colors = terrainGeometry.attributes.color;
   const meterValues = terrainGeometry.attributes.aHeight;
@@ -1028,6 +1124,10 @@ function updateTerrain() {
     positions.array[i * 3 + 1] = h * metersToWorld() * state.exaggeration;
     meterValues.array[i] = h;
     let [r, g, b] = heightColor(h, !state.topo && !state.navigating).map((v) => v / 255);
+    const relief = reliefShade(i, cellM);
+    r = (r + (ROCK[0] - r) * relief.rock) * relief.shade;
+    g = (g + (ROCK[1] - g) * relief.rock) * relief.shade;
+    b = (b + (ROCK[2] - b) * relief.rock) * relief.shade;
     if (areaTint && areaTint.length === heights.length * 4) {
       const a = areaTint[i * 4 + 3];
       if (a > 0) {
@@ -1056,8 +1156,16 @@ function updateTerrain() {
   terrainGeometry.computeVertexNormals();
   terrainGeometry.computeBoundingSphere();
   updateSkirt();
+  if (skirtUniforms) {
+    skirtUniforms.uStrata.value = view3d.strata && !state.navigating ? 1 : 0;
+    skirtUniforms.uWorldToMeters.value = 1 / metersToWorld();
+    skirtUniforms.uVerticalScale.value = state.exaggeration;
+  }
   if (contourUniforms) {
-    contourUniforms.uContours.value = state.topo && !state.navigating ? 1 : 0;
+    contourUniforms.uContours.value = (state.topo || view3d.contours) && !state.navigating ? 1 : 0;
+    contourUniforms.uGrid.value = view3d.grid && !state.navigating ? 1 : 0;
+    contourUniforms.uGridCell.value = gridCellMeters() * metersToWorld();
+    contourUniforms.uHalfWorld.value = WORLD_SIZE / 2;
     contourUniforms.uInterval.value = state.interval;
     contourUniforms.uDetail.value = state.navigating ? 1 : 0;
     contourUniforms.uWorldToMeters.value = 1 / metersToWorld();
@@ -1238,17 +1346,88 @@ function exitObserver() {
   needsRender = true;
 }
 
+function makeSkyTexture() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 4;
+  canvas.height = 256;
+  const ctx = canvas.getContext('2d');
+  const gradient = ctx.createLinearGradient(0, 0, 0, 256);
+  gradient.addColorStop(0, '#a9c6dd');
+  gradient.addColorStop(.55, '#dbe6e6');
+  gradient.addColorStop(1, '#eef0e6');
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, 4, 256);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+// Distance at which the whole model fits the view (both directions, any panel shape).
+function fitDistance() {
+  const radius = WORLD_SIZE * .74;
+  const vfov = THREE.MathUtils.degToRad(camera.fov);
+  const hfov = 2 * Math.atan(Math.tan(vfov / 2) * camera.aspect);
+  return radius / Math.sin(Math.min(vfov, hfov) / 2);
+}
+
+// Compass over the 3D view: the needle shows where north is on screen.
+function updateCompass() {
+  const needle = $('viewCompassRose');
+  if (!needle || !camera || !controls) return;
+  const fx = controls.target.x - camera.position.x;
+  const fz = controls.target.z - camera.position.z;
+  const length = Math.hypot(fx, fz);
+  const angle = length < 1e-6 ? 0 : Math.atan2(-fx, -fz) * 180 / Math.PI;
+  needle.style.transform = `rotate(${-angle}deg)`;
+}
+
+// Turn the view so the given direction points up the screen (like turning a map).
+function viewFacing(direction) {
+  if (!camera || !controls) return;
+  if (state.observer.firstPerson) exitObserver();
+  const forward = { north: [0, -1], east: [1, 0], south: [0, 1], west: [-1, 0] }[direction];
+  const offset = camera.position.clone().sub(controls.target);
+  const horizontal = Math.max(Math.hypot(offset.x, offset.z), fitDistance() * .45);
+  const height = Math.max(offset.y, fitDistance() * .45);
+  camera.position.set(controls.target.x - forward[0] * horizontal, controls.target.y + height, controls.target.z - forward[1] * horizontal);
+  controls.update();
+  needsRender = true;
+  updateCompass();
+}
+
+function applyView3d() {
+  // Shadows stay compiled in (switching castShadow would need every shader rebuilt);
+  // turning them "off" just sets their strength to zero.
+  if (sunLight) sunLight.shadow.intensity = view3d.shadows ? 1 : 0;
+  if (shadowCatcher) shadowCatcher.visible = view3d.shadows && !state.navigating;
+  if (controls) {
+    controls.autoRotate = view3d.autoRotate && !state.navigating;
+    controls.autoRotateSpeed = .7;
+  }
+  for (const input of document.querySelectorAll('[data-view3d]')) input.checked = Boolean(view3d[input.dataset.view3d]);
+  updateTerrain();
+  needsRender = true;
+}
+
+function setView3d(key, value) {
+  view3d[key] = value;
+  try { localStorage.setItem(VIEW3D_KEY, JSON.stringify(view3d)); } catch { /* storage unavailable */ }
+  applyView3d();
+}
+
 function resetCamera() {
   if (state.observer.firstPerson) {
     updateObserverCamera();
     return;
   }
   if (!camera || !controls) return;
+  // Oblique view from the south-east (north up-left), framed to fit the model.
   const sizeFactor = state.mapSize / 4;
-  camera.position.copy(defaultCamera).multiplyScalar(sizeFactor);
-  controls.target.copy(defaultTarget);
+  camera.position.copy(defaultCamera).normalize().multiplyScalar(fitDistance() * .93);
+  controls.target.copy(defaultTarget).multiplyScalar(sizeFactor);
   controls.update();
   needsRender = true;
+  updateCompass();
 }
 
 function updateSceneForMapSize() {
@@ -1262,7 +1441,8 @@ function updateSceneForMapSize() {
     controls.maxDistance = 30 * sizeFactor;
   }
   if (sunLight) {
-    sunLight.position.set(-9 * sizeFactor, 16 * sizeFactor, 10 * sizeFactor);
+    sunLight.position.set(-10 * sizeFactor, 13 * sizeFactor, -9 * sizeFactor);
+    fillLight?.position.set(10 * sizeFactor, 8 * sizeFactor, 9 * sizeFactor);
     const shadowExtent = 10 * sizeFactor;
     sunLight.shadow.camera.left = -shadowExtent;
     sunLight.shadow.camera.right = shadowExtent;
@@ -1853,6 +2033,8 @@ function enterGameMode() {
     scene.fog = new THREE.Fog(0xdfe9e2, WORLD_SIZE * .3, WORLD_SIZE * 1.45);
     scene.background = new THREE.Color(0xdfe9e2);
   }
+  if (groundMesh) groundMesh.visible = true;
+  applyView3d();
   updateObserverUI();
   updateTerrain();
   updateBrushRing();
@@ -1871,8 +2053,9 @@ function exitGameMode() {
   }
   Object.assign(state.observer, gameSaved?.observer || {}, { bob: 0 });
   gameSaved = null;
+  if (groundMesh) groundMesh.visible = false;
   exitObserver();
-  updateTerrain();
+  applyView3d();
   requestAnimationFrame(() => { resizeThree(); resizeMap(); });
 }
 
@@ -2476,6 +2659,7 @@ function updateMapReferenceScale(showMessage = false) {
 
 $('scaleSelect').addEventListener('change', (event) => {
   state.scale = Number(event.target.value);
+  updateTerrain();
   updateMapReferenceScale(true);
   scheduleSave();
 });
@@ -2541,10 +2725,28 @@ $('resetCameraBtn').addEventListener('click', () => {
 $('topCameraBtn').addEventListener('click', () => {
   if (state.observer.firstPerson) exitObserver();
   if (!camera || !controls) return;
-  camera.position.set(0, 17 * state.mapSize / 4, .01);
+  camera.position.set(0, fitDistance() * .9, .01);
   controls.target.set(0, 0, 0);
   controls.update();
   needsRender = true;
+  updateCompass();
+});
+for (const button of document.querySelectorAll('[data-view-facing]')) {
+  button.addEventListener('click', () => viewFacing(button.dataset.viewFacing));
+}
+for (const input of document.querySelectorAll('[data-view3d]')) {
+  input.addEventListener('change', () => setView3d(input.dataset.view3d, input.checked));
+}
+$('viewLayersBtn').addEventListener('click', () => {
+  const panel = $('viewLayersPanel');
+  panel.hidden = !panel.hidden;
+  $('viewLayersBtn').setAttribute('aria-expanded', String(!panel.hidden));
+});
+document.addEventListener('pointerdown', (event) => {
+  if (!$('viewLayersPanel').hidden && !event.target.closest('#viewLayersPanel, #viewLayersBtn')) {
+    $('viewLayersPanel').hidden = true;
+    $('viewLayersBtn').setAttribute('aria-expanded', 'false');
+  }
 });
 document.querySelectorAll('[data-preset]').forEach((button) => {
   button.addEventListener('click', () => {
