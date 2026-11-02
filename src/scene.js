@@ -83,6 +83,7 @@ let rainSimulation = null;
 let lastRandomTerrain = null;
 let mapPanDrag = null;
 let terrainTint = null; // optional per-cell rgba overlay on the 3D terrain (rain.js)
+let areaTint = null;    // land-cover colours under drawn areas (map-features.js); rain overlays win
 let courseDrag = null;
 let navGame = null;
 let lastMapBaseSide = 0;
@@ -1026,6 +1027,14 @@ function updateTerrain() {
     positions.array[i * 3 + 1] = h * metersToWorld() * state.exaggeration;
     meterValues.array[i] = h;
     let [r, g, b] = heightColor(h, !state.topo && !state.navigating).map((v) => v / 255);
+    if (areaTint && areaTint.length === heights.length * 4) {
+      const a = areaTint[i * 4 + 3];
+      if (a > 0) {
+        r += (areaTint[i * 4] - r) * a;
+        g += (areaTint[i * 4 + 1] - g) * a;
+        b += (areaTint[i * 4 + 2] - b) * a;
+      }
+    }
     if (terrainTint && !state.navigating) {
       // Overlay colour per cell (drainage basins, a drop's catchment): rgba in 0..1.
       const a = terrainTint[i * 4 + 3];
@@ -1308,6 +1317,7 @@ function setMapSize(newSize, restoredHeights = null, localSpacing = state.localS
     baseMesh.geometry.dispose();
     baseMesh.geometry = plinthBox();
   }
+  if (previousMapSize === newSize) mapFeatures?.refreshAreas(); // same extent, new grid
   if (previousMapSize !== newSize) {
     sheepGame?.resize(previousMapSize, newSize);
     mapFeatures?.resize(previousMapSize, newSize);
@@ -2612,6 +2622,7 @@ sheepGame = createSheepGame({
 mapFeatures = createMapFeatures({
   scene: () => scene,
   groundMode: () => state.navigating, // real-size, ground-level roads in the navigation game
+  setAreaTint: (tint) => { areaTint = tint; updateTerrain(); },
   metersToWorld,
   surfaceHeight,
   worldSize: () => WORLD_SIZE,
@@ -2694,6 +2705,7 @@ navGame = createNavGame({
   height: sampleHeight,
   verticalScale: () => metersToWorld() * state.exaggeration,
   axes: () => navigation?.frame(),
+  groundInfo: (u, v) => mapFeatures?.groundInfo(u, v),
   updateCamera: updateObserverCamera,
   invalidate: () => { needsRender = true; },
   renderMapBase: (ctx, w, h, dpr) => drawPrintBlock(ctx, w, h, dpr, { mapStyle: 'hypsometric', tintOpacity: .4, showGrid: false, showCoordinates: false, showFeatures: true }),

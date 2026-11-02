@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { AREA_TYPES, AREA_ORDER, isArea, rasterizeAreas, buildSpeedGrid, polygonArea, pointInPolygon } from './areas.js';
 
 export const MAP_FEATURE_TYPES = {
   trail: { label: 'שביל', family: 'land' },
@@ -7,7 +9,9 @@ export const MAP_FEATURE_TYPES = {
   road: { label: 'כביש', family: 'land' },
   perennialStream: { label: 'נחל איתן', family: 'water' },
   intermittentStream: { label: 'נחל אכזב', family: 'water' },
+  ...Object.fromEntries(Object.entries(AREA_TYPES).map(([type, area]) => [type, { label: area.label, family: 'area' }])),
 };
+const minPoints = (type) => (isArea(type) ? 3 : 2);
 
 const TRAIL_COLORS = {
   red: '#c9563f',
@@ -75,7 +79,61 @@ function drawFlowArrow(ctx, points, color, dpr) {
   ctx.restore();
 }
 
+// Small repeating tiles in the style of a printed topographic map.
+const patternCache = new Map();
+function areaPattern(ctx, type, dpr) {
+  const key = `${type}:${dpr}`;
+  if (patternCache.has(key)) return patternCache.get(key);
+  const area = AREA_TYPES[type];
+  const size = Math.round(14 * dpr);
+  const tile = document.createElement('canvas');
+  tile.width = size;
+  tile.height = size;
+  const t = tile.getContext('2d');
+  t.fillStyle = area.fill;
+  t.fillRect(0, 0, size, size);
+  t.strokeStyle = area.ink;
+  t.fillStyle = area.ink;
+  t.lineWidth = Math.max(1, .9 * dpr);
+  const circle = (x, y, r, fill = false) => { t.beginPath(); t.arc(x * size, y * size, r * dpr, 0, Math.PI * 2); fill ? t.fill() : t.stroke(); };
+  if (type === 'naturalForest') { circle(.28, .3, 2.6); circle(.75, .72, 2.2); circle(.8, .22, 1.4); }
+  else if (type === 'plantedForest') { circle(.5, .5, 2.6); circle(0, 0, 2.6); circle(1, 0, 2.6); circle(0, 1, 2.6); circle(1, 1, 2.6); }
+  else if (type === 'orchard') { circle(.25, .25, 1.4, true); circle(.75, .75, 1.4, true); }
+  else if (type === 'vineyard') {
+    for (const x of [.25, .75]) { t.beginPath(); t.moveTo(x * size, .15 * size); t.lineTo(x * size, .85 * size); t.stroke(); }
+  } else if (type === 'field') {
+    t.globalAlpha = .5;
+    t.beginPath(); t.moveTo(0, .5 * size); t.lineTo(size, .5 * size); t.stroke();
+  } else if (type === 'builtUp') {
+    t.beginPath(); t.moveTo(0, size); t.lineTo(size, 0); t.moveTo(-size / 2, size / 2); t.lineTo(size / 2, -size / 2); t.moveTo(size / 2, size * 1.5); t.lineTo(size * 1.5, size / 2); t.stroke();
+  }
+  const pattern = ctx.createPattern(tile, 'repeat');
+  patternCache.set(key, pattern);
+  return pattern;
+}
+
+function drawArea2D(ctx, canvas, dpr, feature, previewPoint) {
+  const source = previewPoint ? [...feature.points, previewPoint] : feature.points;
+  if (source.length < 2) return;
+  const area = AREA_TYPES[feature.type];
+  ctx.save();
+  ctx.beginPath();
+  source.forEach((p, i) => (i ? ctx.lineTo(p.u * canvas.width, p.v * canvas.height) : ctx.moveTo(p.u * canvas.width, p.v * canvas.height)));
+  ctx.closePath();
+  // Translucent so the contour lines underneath stay readable, as on a printed map.
+  ctx.globalAlpha = previewPoint ? .45 : .62;
+  ctx.fillStyle = areaPattern(ctx, feature.type, dpr);
+  ctx.fill('evenodd');
+  ctx.globalAlpha = 1;
+  ctx.lineWidth = 1.3 * dpr;
+  ctx.strokeStyle = area.ink;
+  if (previewPoint) ctx.setLineDash([5 * dpr, 4 * dpr]);
+  ctx.stroke();
+  ctx.restore();
+}
+
 function drawFeature2D(ctx, canvas, dpr, feature, previewPoint = null) {
+  if (isArea(feature.type)) { drawArea2D(ctx, canvas, dpr, feature, previewPoint); return; }
   const source = previewPoint ? [...feature.points, previewPoint] : feature.points;
   const points = source.map((point) => ({ x: point.u * canvas.width, y: point.v * canvas.height }));
   if (points.length < 2) return;
@@ -124,7 +182,7 @@ function samplePolyline(points, step = .008) {
 
 function disposeObject(object) {
   object.traverse((child) => {
-    child.geometry?.dispose?.();
+    if (!child.isInstancedMesh) child.geometry?.dispose?.(); // instanced area geometries are shared
     if (Array.isArray(child.material)) child.material.forEach((material) => material.dispose());
     else child.material?.dispose?.();
   });
@@ -219,8 +277,95 @@ function addGroundFeature3D(api, group, feature) {
   }
 }
 
+function hash01(value) {
+  let x = value >>> 0;
+  x = Math.imul(x ^ (x >>> 16), 0x7feb352d);
+  x = Math.imul(x ^ (x >>> 15), 0x846ca68b);
+  return ((x ^ (x >>> 16)) >>> 0) / 4294967296;
+}
+
+// What each area grows: shape, size (metres in the navigation game; exaggerated in the
+// overview so it reads on a whole-map model), colour and spacing.
+const AREA_OBJECTS = {
+  naturalForest: { shape: 'tree', ground: [5, 8], overview: .09, color: [.28, .42, .2], density: 3200, groundSpacing: 9, jitter: 1 },
+  plantedForest: { shape: 'cone', ground: [8, 12], overview: .12, color: [.2, .36, .19], density: 2600, groundSpacing: 7, jitter: .15 },
+  orchard: { shape: 'tree', ground: [3, 4], overview: .07, color: [.36, .52, .24], density: 2400, groundSpacing: 6, jitter: .05 },
+  vineyard: { shape: 'box', ground: [1.2, 1.6], overview: .04, color: [.42, .5, .23], density: 2600, groundSpacing: 3, jitter: .05 },
+  builtUp: { shape: 'house', ground: [4, 9], overview: .07, color: [.86, .8, .7], density: 700, groundSpacing: 22, jitter: .3 },
+};
+const geometryCache = {};
+function areaGeometry(shape) {
+  if (geometryCache[shape]) return geometryCache[shape];
+  let geometry;
+  // Vertex colours: the trunk stays brown, the instance colour tints the crown.
+  const painted = (geo, rgb) => {
+    const colors = new Float32Array(geo.attributes.position.count * 3);
+    for (let i = 0; i < colors.length; i += 3) colors.set(rgb, i);
+    geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    return geo.index ? geo.toNonIndexed() : geo;
+  };
+  const trunk = (height) => painted(new THREE.CylinderGeometry(.05, .07, height, 6).translate(0, height / 2, 0), [1.6, 1.1, .75]);
+  if (shape === 'tree') geometry = mergeGeometries([trunk(.4), painted(new THREE.IcosahedronGeometry(.5, 0).scale(1, .85, 1).translate(0, .72, 0), [1, 1, 1])]);
+  else if (shape === 'cone') geometry = mergeGeometries([trunk(.2), painted(new THREE.ConeGeometry(.32, .85, 7).translate(0, .6, 0), [1, 1, 1])]);
+  else if (shape === 'cone-plain') geometry = new THREE.ConeGeometry(.32, 1, 7).translate(0, .5, 0);
+  else if (shape === 'blob') geometry = new THREE.IcosahedronGeometry(.5, 0).scale(1, .9, 1).translate(0, .45, 0);
+  else if (shape === 'box') geometry = painted(new THREE.BoxGeometry(.5, 1, .5).translate(0, .5, 0), [1, 1, 1]);
+  else geometry = painted(new THREE.BoxGeometry(1, 1, 1.3).translate(0, .5, 0), [1, 1, 1]);
+  geometryCache[shape] = geometry;
+  return geometry;
+}
+
+function addArea3D(api, group, feature) {
+  const spec = AREA_OBJECTS[feature.type];
+  if (!spec) return; // fields: colour only
+  const W = api.worldSize();
+  const ground = api.groundMode?.();
+  const mtw = api.metersToWorld?.() || W / 4000;
+  const extent = W / mtw;
+  const share = polygonArea(feature.points);
+  // Spacing: real metres in the game, a fixed density in the overview; capped either way.
+  const spacingUV = ground ? spec.groundSpacing / extent : 1 / Math.sqrt(spec.density);
+  const target = Math.min(4000, Math.round(share / (spacingUV * spacingUV)));
+  if (target < 1) return;
+  const step = Math.sqrt(share / target);
+  let minU = 1; let maxU = 0; let minV = 1; let maxV = 0;
+  for (const p of feature.points) { minU = Math.min(minU, p.u); maxU = Math.max(maxU, p.u); minV = Math.min(minV, p.v); maxV = Math.max(maxV, p.v); }
+  const mesh = new THREE.InstancedMesh(areaGeometry(spec.shape), new THREE.MeshStandardMaterial({ flatShading: true, roughness: .9, vertexColors: true }), target);
+  const matrix = new THREE.Matrix4();
+  const q = new THREE.Quaternion();
+  const color = new THREE.Color();
+  const surface = api.surfaceHeight || api.height;
+  const vs = api.verticalScale();
+  let count = 0;
+  let k = 0;
+  // A jittered lattice: planted forests and orchards stay in rows, natural forest is irregular.
+  for (let v = minV + step / 2; v < maxV && count < target; v += step) {
+    for (let u = minU + step / 2; u < maxU && count < target; u += step, k++) {
+      const pu = u + (hash01(feature.id * 7919 + k * 3) - .5) * step * spec.jitter;
+      const pv = v + (hash01(feature.id * 104729 + k * 5) - .5) * step * spec.jitter;
+      if (!pointInPolygon(pu, pv, feature.points)) continue;
+      const r = hash01(k * 13 + feature.id);
+      const size = ground ? (spec.ground[0] + (spec.ground[1] - spec.ground[0]) * r) * mtw : spec.overview * (W / 10) * (.75 + r * .5);
+      const width = spec.shape === 'house' ? size * (.9 + hash01(k * 17) * .6) : size * (spec.shape === 'box' ? 1.4 : spec.shape === 'tree' ? 1 : .9);
+      q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), spec.jitter > .5 ? r * Math.PI * 2 : 0);
+      matrix.compose(new THREE.Vector3((pu - .5) * W, surface(pu, pv) * vs, (pv - .5) * W), q, new THREE.Vector3(width, size, width));
+      mesh.setMatrixAt(count, matrix);
+      const shade = .85 + hash01(k * 29) * .3;
+      color.setRGB(spec.color[0] * shade, spec.color[1] * shade, spec.color[2] * shade);
+      if (spec.shape === 'house' && hash01(k * 31) > .6) color.setRGB(.78, .5, .42); // some red roofs
+      mesh.setColorAt(count, color);
+      count++;
+    }
+  }
+  mesh.count = count;
+  mesh.castShadow = !ground;
+  mesh.frustumCulled = false;
+  group.add(mesh);
+}
+
 function addFeature3D(api, group, feature) {
   const add = (mesh) => { if (mesh) group.add(mesh); };
+  if (isArea(feature.type)) { addArea3D(api, group, feature); return; }
   if (api.groundMode?.()) { addGroundFeature3D(api, group, feature); return; }
   if (feature.type === 'trail') {
     add(makeRibbon(api, feature.points, .035, 0x3c3c34, { dashed: true, dashLength: .12 }));
@@ -292,7 +437,36 @@ export function createMapFeatures(api) {
     api.invalidate();
   }
 
+  let speedGrid = null;
+  let areaGrid = null;
+  // Colours the 3D terrain under the areas and rebuilds the walking-speed grid.
+  function refreshAreas() {
+    const n = api.gridSize();
+    areaGrid = rasterizeAreas(n, features);
+    speedGrid = null;
+    let any = false;
+    const tint = new Float32Array(n * n * 4);
+    for (let i = 0; i < n * n; i++) {
+      const index = areaGrid[i];
+      if (index < 0) continue;
+      any = true;
+      tint.set([...AREA_TYPES[AREA_ORDER[index]].tint, .55], i * 4);
+    }
+    api.setAreaTint?.(any ? tint : null);
+  }
+
+  // Walking speed and land cover at a map point (navigation game).
+  function groundInfo(u, v) {
+    const n = api.gridSize();
+    if (!areaGrid || areaGrid.length !== n * n) refreshAreas();
+    if (!speedGrid) speedGrid = buildSpeedGrid(n, features, api.worldSize() / (api.metersToWorld?.() || api.worldSize() / 4000), areaGrid);
+    const i = Math.round(Math.min(1, Math.max(0, v)) * (n - 1)) * n + Math.round(Math.min(1, Math.max(0, u)) * (n - 1));
+    const index = areaGrid[i];
+    return { speed: speedGrid[i], area: index >= 0 ? AREA_TYPES[AREA_ORDER[index]].label : null, onPath: speedGrid[i] > 1 };
+  }
+
   function redrawAll() {
+    refreshAreas();
     api.redraw();
     rebuild3D();
   }
@@ -310,7 +484,7 @@ export function createMapFeatures(api) {
   function updateStatus(message = '') {
     const status = document.getElementById('featureStatus');
     const activeLabel = activeType ? MAP_FEATURE_TYPES[activeType].label : null;
-    document.getElementById('finishFeatureBtn').disabled = !draft || draft.points.length < 2;
+    document.getElementById('finishFeatureBtn').disabled = !draft || draft.points.length < minPoints(draft.type);
     document.getElementById('cancelFeatureBtn').disabled = !draft;
     document.getElementById('removeLastFeatureBtn').disabled = features.length === 0;
     document.getElementById('mapCanvas').classList.toggle('drawing-feature', Boolean(activeType));
@@ -320,7 +494,9 @@ export function createMapFeatures(api) {
       button.setAttribute('aria-pressed', String(selected));
     }
     if (message) status.textContent = message;
+    else if (draft && isArea(draft.type)) status.textContent = `${activeLabel}: ${draft.points.length} פינות. לחיצה כפולה או Enter סוגרים את השטח.`;
     else if (draft) status.textContent = `${activeLabel}: ${draft.points.length} נקודות. לחיצה כפולה או Enter לסיום.`;
+    else if (activeType && isArea(activeType)) status.textContent = `${activeLabel}: לחצו על המפה פינה אחר פינה סביב השטח. שטח שמצויר בתוך שטח אחר "חותך" אותו (קרחת יער).`;
     else if (activeType) status.textContent = `${activeLabel}: לחצו על המפה ממקום למקום. בנחל—ציירו מהמעלה למורד.`;
     else if (features.length) status.textContent = `נוספו ${features.length} פריטי תכסית למפה.`;
     else status.textContent = 'בחרו סוג קו ואז לחצו לאורך המסלול במפה.';
@@ -368,8 +544,8 @@ export function createMapFeatures(api) {
   }
 
   function finish() {
-    if (!draft || draft.points.length < 2) {
-      updateStatus('נדרשות לפחות שתי נקודות כדי ליצור קו.');
+    if (!draft || draft.points.length < minPoints(draft.type)) {
+      updateStatus(isArea(draft?.type) ? 'שטח צריך לפחות שלוש פינות.' : 'נדרשות לפחות שתי נקודות כדי ליצור קו.');
       return false;
     }
     api.beforeChange?.();
@@ -426,7 +602,8 @@ export function createMapFeatures(api) {
   }
 
   function draw2D(ctx, canvas, dpr, includeDraft = true) {
-    for (const feature of features) drawFeature2D(ctx, canvas, dpr, feature);
+    for (const feature of features) if (isArea(feature.type)) drawFeature2D(ctx, canvas, dpr, feature);
+    for (const feature of features) if (!isArea(feature.type)) drawFeature2D(ctx, canvas, dpr, feature);
     if (!includeDraft || !draft) return;
     drawFeature2D(ctx, canvas, dpr, draft, hoverPoint);
     ctx.save();
@@ -453,10 +630,11 @@ export function createMapFeatures(api) {
         .map((point) => ({ u: .5 + (point.u - .5) * oldSize / newSize, v: .5 + (point.v - .5) * oldSize / newSize }))
         .filter((point) => point.u >= 0 && point.u <= 1 && point.v >= 0 && point.v <= 1);
     }
-    for (let i = features.length - 1; i >= 0; i--) if (features[i].points.length < 2) features.splice(i, 1);
+    for (let i = features.length - 1; i >= 0; i--) if (features[i].points.length < minPoints(features[i].type)) features.splice(i, 1);
     cancel(false);
     refreshValidation();
     updateLegend();
+    refreshAreas();
     rebuild3D();
   }
 
@@ -467,13 +645,14 @@ export function createMapFeatures(api) {
   function load(list = []) {
     features.length = 0;
     for (const item of list) {
-      if (!MAP_FEATURE_TYPES[item?.type] || !Array.isArray(item.points) || item.points.length < 2) continue;
+      if (!MAP_FEATURE_TYPES[item?.type] || !Array.isArray(item.points) || item.points.length < minPoints(item.type)) continue;
       features.push({ id: nextId++, type: item.type, color: item.color || 'red', points: item.points.map(({ u, v }) => ({ u: clamp(u, 0, 1), v: clamp(v, 0, 1) })) });
     }
     cancel(false);
     refreshValidation();
     updateLegend();
     updateStatus();
+    refreshAreas();
     rebuild3D();
   }
 
@@ -511,6 +690,8 @@ export function createMapFeatures(api) {
     serialize,
     load,
     clearAll,
+    groundInfo,
+    refreshAreas,
     get active() { return Boolean(activeType); },
     get activeType() { return activeType; },
     get drafting() { return Boolean(draft); },

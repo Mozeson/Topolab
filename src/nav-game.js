@@ -731,7 +731,9 @@ export function createNavGame(api) {
         const probe = 8 / extent;
         const ahead = api.height(clamp(o.u + dx * probe, 0, 1), clamp(o.v + dy * probe, 0, 1));
         run.grade = (ahead - here) / 8;
-        run.pace = slopeSpeedFactor(run.grade);
+        // Land cover: forests slow you down, roads and trails speed you up (areas.js).
+        run.ground = api.groundInfo?.(o.u, o.v) || null;
+        run.pace = slopeSpeedFactor(run.grade) * (run.ground?.speed ?? 1);
         const speed = baseSpeed(extent) * (running ? RUN_FACTOR : 1) * (dir < 0 ? BACK_FACTOR : 1) * input * run.pace;
         const nu = clamp(o.u + dx * speed * dt / extent, .002, .998);
         const nv = clamp(o.v + dy * speed * dt / extent, .002, .998);
@@ -748,6 +750,7 @@ export function createNavGame(api) {
         if (run.keysFade <= 0) $('navKeys').classList.add('faded');
       } else {
         run.pace = 1;
+        run.ground = api.groundInfo?.(o.u, o.v) || null;
         run.grade = 0;
         o.bob *= .85;
       }
@@ -783,7 +786,9 @@ export function createNavGame(api) {
     $('navPaceBar').style.width = `${Math.round(pace * 100)}%`;
     $('navPaceBar').style.background = `hsl(${Math.round(pace * 120)} 65% 58%)`;
     const g = Math.round(run.grade * 100);
-    $('navSlopeText').textContent = Math.abs(g) < 3 ? 'מישור' : g > 0 ? `עלייה ${g}%` : `ירידה ${-g}%`;
+    const slopeText = Math.abs(g) < 3 ? 'מישור' : g > 0 ? `עלייה ${g}%` : `ירידה ${-g}%`;
+    const groundText = run.ground?.onPath ? 'דרך' : run.ground?.area || '';
+    $('navSlopeText').textContent = groundText ? `${slopeText} · ${groundText}` : slopeText;
     const hint = $('navHint');
     const next = points[run.next];
     if (!next || phase !== 'running') { hint.textContent = ''; return; }

@@ -623,7 +623,7 @@ body.navigating .scene-panel .scene-viewport { flex: 1 1 auto; min-height: 0; as
 .nav-pace { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 7px; font-size: 11px; color: rgb(255 255 255 / 75%); }
 .nav-pace-bar { height: 6px; overflow: hidden; border-radius: 4px; background: rgb(255 255 255 / 16%); }
 .nav-pace-bar i { display: block; height: 100%; width: 100%; border-radius: 4px; background: #77d18b; transition: width 200ms linear, background-color 200ms linear; }
-.nav-pace b { min-width: 58px; font-weight: 600; text-align: left; }
+.nav-pace b { min-width: 58px; font-weight: 600; text-align: left; white-space: nowrap; }
 .nav-penalty { font-size: 12px; color: #ffcf9e; }
 
 .nav-actions { position: absolute; top: 16px; left: 16px; display: flex; gap: 8px; }
@@ -883,3 +883,14 @@ body.navigating .scene-panel .scene-viewport { flex: 1 1 auto; min-height: 0; as
 .grid-settings-card label { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .grid-settings-card input { width: 120px; padding: 4px 6px; border: 1px solid var(--line-strong); border-radius: 6px; direction: ltr; font-variant-numeric: tabular-nums; }
 .grid-settings-actions { display: flex; gap: 6px; }
+
+/* Area land-cover swatches (toolbar and legend) */
+.area-swatch { width: 22px; height: 14px; border: 1px solid; border-radius: 3px; }
+.swatch-naturalForest, .feature-legend-item.feature-naturalForest i { background: radial-gradient(circle at 30% 35%, transparent 2px, #4f8a3c 2.2px, transparent 3.2px) 0 0 / 9px 9px, #cfe3b4; border-color: #4f8a3c; }
+.swatch-plantedForest, .feature-legend-item.feature-plantedForest i { background: radial-gradient(circle, transparent 1.6px, #3f7a35 1.8px, transparent 2.8px) 0 0 / 7px 7px, #d5e8bd; border-color: #3f7a35; }
+.swatch-orchard, .feature-legend-item.feature-orchard i { background: radial-gradient(circle, #5d8f3e 1.2px, transparent 1.6px) 0 0 / 6px 6px, #e3eecb; border-color: #5d8f3e; }
+.swatch-vineyard, .feature-legend-item.feature-vineyard i { background: repeating-linear-gradient(90deg, #7a7a33 0 1px, transparent 1px 4px), #ece8c6; border-color: #7a7a33; }
+.swatch-field, .feature-legend-item.feature-field i { background: #f3ecc4; border-color: #c9b56a; }
+.swatch-builtUp, .feature-legend-item.feature-builtUp i { background: repeating-linear-gradient(-45deg, #b9784a 0 1px, transparent 1px 4px), #f0caa0; border-color: #b9784a; }
+.feature-legend-item.feature-naturalForest i, .feature-legend-item.feature-plantedForest i, .feature-legend-item.feature-orchard i,
+.feature-legend-item.feature-vineyard i, .feature-legend-item.feature-field i, .feature-legend-item.feature-builtUp i { width: 18px; height: 11px; border: 1px solid; border-radius: 2px; }
