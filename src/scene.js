@@ -79,6 +79,7 @@ let mapFeatures = null;
 let rainSimulation = null;
 let lastRandomTerrain = null;
 let mapPanDrag = null;
+let terrainTint = null; // optional per-cell rgba overlay on the 3D terrain (rain.js)
 let courseDrag = null;
 let navGame = null;
 let lastMapBaseSide = 0;
@@ -468,7 +469,7 @@ function isSculptTool(tool = state.tool) {
 }
 
 function drawBrush() {
-  if (!state.pointer || !isSculptTool() || isPanning()) return;
+  if (!state.pointer || !isSculptTool() || isPanning() || rainSimulation?.dropMode) return;
   const { gx, gy } = state.pointer;
   const x = (gx / (N - 1)) * mapCanvas.width;
   const y = (gy / (N - 1)) * mapCanvas.height;
@@ -988,7 +989,16 @@ function updateTerrain() {
     const h = heights[i];
     positions.array[i * 3 + 1] = h * metersToWorld() * state.exaggeration;
     meterValues.array[i] = h;
-    const [r, g, b] = heightColor(h, !state.topo && !state.navigating).map((v) => v / 255);
+    let [r, g, b] = heightColor(h, !state.topo && !state.navigating).map((v) => v / 255);
+    if (terrainTint && !state.navigating) {
+      // Overlay colour per cell (drainage basins, a drop's catchment): rgba in 0..1.
+      const a = terrainTint[i * 4 + 3];
+      if (a > 0) {
+        r += (terrainTint[i * 4] - r) * a;
+        g += (terrainTint[i * 4 + 1] - g) * a;
+        b += (terrainTint[i * 4 + 2] - b) * a;
+      }
+    }
     const color = new THREE.Color().setRGB(r, g, b, THREE.SRGBColorSpace);
     colors.array[i * 3] = color.r;
     colors.array[i * 3 + 1] = color.g;
@@ -1030,7 +1040,7 @@ function updateBrushRing() {
     brushRing.visible = false;
     scene.add(brushRing);
   }
-  const visible = Boolean(state.pointer) && isSculptTool() && !isPanning() && !state.observer.firstPerson && !state.observer.placing;
+  const visible = Boolean(state.pointer) && isSculptTool() && !isPanning() && !rainSimulation?.dropMode && !state.observer.firstPerson && !state.observer.placing;
   if (brushRing.visible !== visible) needsRender = true;
   brushRing.visible = visible;
   if (!visible) return;
@@ -1798,6 +1808,11 @@ mapCanvas.addEventListener('pointerdown', (event) => {
   event.preventDefault();
   mapCanvas.focus({ preventScroll: true });
   const next = eventToGrid(event);
+  // The rain panel's drop tool takes clicks while it is on.
+  if (rainSimulation?.dropMode) {
+    rainSimulation.handleMapClick(next.gx, next.gy);
+    return;
+  }
   if (state.tool === 'course') {
     handleCoursePointerDown(next, event);
     return;
@@ -1869,6 +1884,10 @@ mapCanvas.addEventListener('pointermove', (event) => {
     return;
   }
   updatePointReadout(next, event);
+  if (rainSimulation?.dropMode) {
+    rainSimulation.handleMapHover(next.gx, next.gy);
+    return;
+  }
   if (courseDrag) {
     moveCoursePoint(courseDrag, { u: next.gx / (N - 1), v: next.gy / (N - 1) });
     courseDrag.moved = true;
@@ -2388,6 +2407,8 @@ mapFeatures = createMapFeatures({
 });
 rainSimulation = createRainSimulation({
   scene: () => scene,
+  setTerrainTint: (tint) => { terrainTint = tint; updateTerrain(); },
+  setDropCursor: (on) => { mapCanvas.classList.toggle('drop-mode', on); updateBrushRing(); drawMap(); },
   surfaceHeight,
   extent: mapExtentMeters,
   worldSize: () => WORLD_SIZE,

@@ -315,6 +315,7 @@
               <div class="map-view-label" id="mapViewLabel" aria-live="polite">קנה מידה 1:25,000 · זום 100%</div>
               <div class="cursor-readout" id="cursorReadout" aria-hidden="true" hidden></div>
               <div class="rain-panel" id="rainPanel" hidden>
+                <button type="button" class="rain-collapse" id="rainCollapseBtn" aria-expanded="true" aria-label="הקטנת חלונית הגשם" title="הקטנה / הגדלה">⌃</button>
                 <label class="rain-amount" for="rainAmount">
                   <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 15a4 4 0 1 1 1-7.9A5 5 0 0 1 18 9a3 3 0 0 1 0 6H7Z"/><path d="m8 18-1 2m5-2-1 2m5-2-1 2"/></svg>
                   <span>כמות גשם</span>
@@ -322,8 +323,17 @@
                   <output id="rainAmountValue" for="rainAmount"></output>
                 </label>
                 <div class="rain-status" id="rainStatusOverlay" role="status" aria-live="polite"></div>
+                <div class="rain-tools" role="group" aria-label="כלי ניתוח המים">
+                  <button type="button" id="basinsBtn" aria-pressed="false" title="צביעת השטח לפי המקום שאליו המים מגיעים, וקווי פרשת המים">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5c4 1 5 5 9 5s5-4 9-5M12 10v11"/><path d="M3 5v14h18V5" opacity=".55"/></svg>אגני ניקוז
+                  </button>
+                  <button type="button" id="dropToolBtn" aria-pressed="false" title="לחצו על נקודה במפה כדי לראות לאן מגיעה ממנה טיפה ומאיפה מגיעים אליה מים">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3s6 6.5 6 11a6 6 0 0 1-12 0c0-4.5 6-11 6-11Z"/></svg>טיפה
+                  </button>
+                </div>
                 <p class="rain-legend"><i aria-hidden="true"></i>כל קו דק הוא טיפה שזורמת במורד התלול ביותר: מכיפה לכל הכיוונים, תמיד בניצב לקווי הגובה</p>
               </div>
+              <div class="water-info" id="waterInfo" role="status" aria-live="polite" hidden></div>
               <div class="feature-legend" id="featureLegend" aria-label="מקרא תכסית" hidden></div>
               <div class="map-zoom-controls" role="group" aria-label="זום והזזת המפה">
                 <button id="mapZoomInBtn" type="button" aria-label="התקרבות" title="התקרבות (+)">+</button>

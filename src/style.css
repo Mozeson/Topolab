@@ -209,6 +209,7 @@ body.resizing-panels { user-select: none; cursor: col-resize; }
 #mapCanvas.pan-mode { cursor: grab; }
 #mapCanvas.is-panning { cursor: grabbing; }
 #mapCanvas.drawing-feature { cursor: copy; }
+#mapCanvas.drop-mode { cursor: cell; }
 .map-corner { position: absolute; z-index: 2; pointer-events: none; }
 .map-north { top: 13px; left: 14px; display: grid; justify-items: center; color: #354d50; }
 .map-north span { font-size: 12px; font-weight: 700; }
@@ -230,6 +231,23 @@ body.resizing-panels { user-select: none; cursor: col-resize; }
 .rain-amount input { width: 100%; accent-color: #1f78a8; }
 .rain-amount output { min-width: 112px; font-size: 11px; text-align: left; font-variant-numeric: tabular-nums; }
 .rain-status { font-size: 11px; font-weight: 600; line-height: 1.45; text-align: center; }
+.rain-tools { display: flex; justify-content: center; gap: 6px; }
+.rain-tools button { min-height: 30px; padding: 0 12px; display: inline-flex; align-items: center; gap: 6px; color: #1f5e80; background: #fff; border: 1px solid #b9d6e3; border-radius: 15px; font-size: 12px; font-weight: 700; }
+.rain-tools button:hover { background: #e3f1f8; }
+.rain-tools button[aria-pressed='true'] { color: #fff; background: #1f78a8; border-color: #1f78a8; }
+.rain-tools svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+#dropToolBtn[aria-pressed='true'] svg { fill: rgb(255 255 255 / 35%); }
+.water-info { position: absolute; z-index: 6; left: 50%; bottom: 14px; transform: translateX(-50%); width: min(92%, 470px); padding: 9px 12px; display: grid; gap: 5px; color: #1d3f52; background: rgb(255 255 255 / 95%); border: 1px solid #b9d6e3; border-radius: 12px; box-shadow: 0 6px 18px rgb(29 83 104 / 18%); font-size: 11px; line-height: 1.5; }
+.rain-panel { padding-inline-start: 34px; }
+.rain-collapse { position: absolute; top: 6px; inset-inline-start: 6px; width: 24px; height: 24px; padding: 0; color: #1f5e80; background: #fff; border: 1px solid #b9d6e3; border-radius: 7px; font-size: 14px; line-height: 1; }
+.rain-panel.collapsed { padding-block: 6px; }
+.rain-panel.collapsed > :not(.rain-collapse):not(.rain-amount):not(.rain-tools) { display: none; }
+.rain-panel.collapsed .rain-collapse { transform: rotate(180deg); }
+.water-info strong { color: #0f4c72; }
+.water-info .basin-chips { display: flex; flex-wrap: wrap; gap: 4px 10px; }
+.water-info .basin-chips span { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.water-info .basin-chips i { width: 11px; height: 11px; border-radius: 3px; box-shadow: inset 0 0 0 1px rgb(0 0 0 / 15%); }
+.water-info .info-close { justify-self: start; padding: 0; color: #4d7b93; background: none; border: 0; font-size: 11px; text-decoration: underline; }
 .rain-legend { margin: 0; display: flex; align-items: center; justify-content: center; gap: 6px; color: #3b6d86; font-size: 10px; line-height: 1.4; text-align: center; }
 .rain-legend i { width: 18px; height: 0; flex: 0 0 auto; border-top: 2px solid #1260a8; border-radius: 2px; }
 @media (max-width: 560px) { .rain-legend { display: none; } }

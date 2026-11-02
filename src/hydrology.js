@@ -339,3 +339,108 @@ export function computeHydrology(n, heights, options = {}) {
   const water = simulateRain(base, options);
   return { ...base, ...water, depth: water.wet, receivers: base.receivers };
 }
+
+// ——— Drainage basins, drop paths and upstream areas ———
+// Where does the water of each cell end up? Following D8 receivers, it either leaves the map
+// at an edge cell, or stops in a lake that this rain does not fill (a closed basin). Water
+// reaching a full lake keeps going through its spill point.
+
+function sideOf(n, index) {
+  const x = index % n;
+  const y = Math.floor(index / n);
+  const parts = [];
+  if (y === 0) parts.push('north');
+  if (y === n - 1) parts.push('south');
+  if (x === n - 1) parts.push('east');
+  if (x === 0) parts.push('west');
+  return parts.join('-') || 'inside';
+}
+
+// Destination key per cell: 'L<id>' for a lake that is not full, 'E<cell>' for an edge exit.
+function destinations(base, water) {
+  const { size: n, receivers, order, lakeId } = base;
+  const count = n * n;
+  const dest = new Array(count);
+  for (let k = count - 1; k >= 0; k--) { // lowest first: receivers are resolved before donors
+    const i = order[k];
+    const id = lakeId[i];
+    if (id >= 0 && !water.lakes[id].full) dest[i] = `L${id}`;
+    else if (receivers[i] < 0) dest[i] = `E${i}`;
+    else dest[i] = dest[receivers[i]];
+  }
+  return dest;
+}
+
+// Basins that drain at least `minShare` of the map get their own id (largest first, at most
+// `maxBasins`); the rest (small slopes running straight off the map edge) get -1.
+export function drainageBasins(base, water, { minShare = .02, maxBasins = 12 } = {}) {
+  const n = base.size;
+  const count = n * n;
+  const dest = destinations(base, water);
+  const sizes = new Map();
+  for (const key of dest) sizes.set(key, (sizes.get(key) || 0) + 1);
+  const kept = [...sizes.entries()]
+    .filter(([, cells]) => cells >= count * minShare)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, maxBasins);
+  const idOf = new Map(kept.map(([key], i) => [key, i]));
+  const basinOf = new Int16Array(count).fill(-1);
+  for (let i = 0; i < count; i++) basinOf[i] = idOf.has(dest[i]) ? idOf.get(dest[i]) : -1;
+  const basins = kept.map(([key, cells], id) => {
+    const index = Number(key.slice(1));
+    const destination = key[0] === 'L'
+      ? { type: 'lake', lake: index }
+      : { type: 'edge', cell: index, side: sideOf(n, index) };
+    return { id, cells, share: cells / count, destination };
+  });
+  return { basinOf, basins };
+}
+
+// The path a drop takes from `start` (cell index) until it leaves the map or settles in a
+// lake that is not full. Returns the cells and how it ends.
+export function tracePath(base, water, start) {
+  const { size: n, receivers, lakeId } = base;
+  const cells = [start];
+  let current = start;
+  for (let guard = 0; guard < n * n; guard++) {
+    const id = lakeId[current];
+    if (id >= 0 && !water.lakes[id].full && water.wet[current] > base.minLakeDepth) {
+      return { cells, end: { type: 'lake', lake: id } };
+    }
+    const next = receivers[current];
+    if (next < 0) return { cells, end: { type: 'edge', cell: current, side: sideOf(n, current) } };
+    cells.push(next);
+    current = next;
+  }
+  return { cells, end: { type: 'stuck' } };
+}
+
+// All cells whose water passes through `target` (its catchment), via a reverse walk of the
+// D8 receivers. The donor lists are built once per terrain and cached on `base`.
+export function upstreamArea(base, target) {
+  const { size: n, receivers } = base;
+  const count = n * n;
+  if (!base.donorStart) {
+    const degree = new Int32Array(count + 1);
+    for (let i = 0; i < count; i++) if (receivers[i] >= 0) degree[receivers[i] + 1]++;
+    for (let i = 0; i < count; i++) degree[i + 1] += degree[i];
+    const list = new Int32Array(degree[count]);
+    const fill = degree.slice(0, count);
+    for (let i = 0; i < count; i++) if (receivers[i] >= 0) list[fill[receivers[i]]++] = i;
+    base.donorStart = degree;
+    base.donors = list;
+  }
+  const mask = new Uint8Array(count);
+  const stack = [target];
+  mask[target] = 1;
+  let cells = 0;
+  while (stack.length) {
+    const c = stack.pop();
+    cells++;
+    for (let k = base.donorStart[c]; k < base.donorStart[c + 1]; k++) {
+      const d = base.donors[k];
+      if (!mask[d]) { mask[d] = 1; stack.push(d); }
+    }
+  }
+  return { mask, cells };
+}
