@@ -7,8 +7,8 @@
 // Headings follow the walker: 0° = north (−v), 90° = east (+u).
 
 export const CAMEL = {
-  counts: { none: 0, few: 5, many: 12 },
-  detectFactor: .035,      // × map extent: how close before a camel notices you…
+  counts: { none: 0, few: 8, many: 16 },
+  detectFactor: .04,       // × map extent: how close before a camel notices you (160 m on 4 km)…
   minDetect: 60,           // …but never less than this (m)
   catchFactor: .0013,      // × extent: "caught" distance…
   minCatch: 4,             // …at least this (m)
@@ -21,6 +21,9 @@ export const CAMEL = {
   caughtRestSeconds: 30,   // …and for longer after catching you
   giveUpFactor: 2.4,       // × detection radius: too far, gives up
   startClear: .1,          // no camels within this × extent of the start (≥ 250 m)
+  controlClear: .025,      // …nor right at a control (≥ 80 m)
+  routeFactor: .06,        // herds favour valleys within about this × extent of the route (≥ 150 m)…
+  offRoute: .08,           // …far from it the odds drop to this share
   herdSpread: 40,          // m around a herd's spot
   wanderFactor: .02,       // × extent: how far a grazing camel strolls (≥ 40 m)
 };
@@ -79,18 +82,37 @@ function makeCamel(u, v, rng) {
   };
 }
 
-// Herds of 1–3 camels around spots drawn with valley-weighted odds (a few roam elsewhere),
-// none near the start. `score` is a valleyScore grid; `avoid` lists map points to keep clear.
-export function spawnCamels({ score, n, count, rng, extent, avoid = [] }) {
+// Distance in map units from p to the segment a–b.
+function segmentDistance(p, a, b) {
+  const du = b.u - a.u;
+  const dv = b.v - a.v;
+  const length2 = du * du + dv * dv;
+  const t = length2 ? clamp(((p.u - a.u) * du + (p.v - a.v) * dv) / length2, 0, 1) : 0;
+  return Math.hypot(p.u - (a.u + t * du), p.v - (a.v + t * dv));
+}
+
+// Herds of 1–3 camels around spots drawn with valley-weighted odds. Given the course
+// (`route`: start, controls, finish), mostly the valleys along it, so a navigation actually
+// meets them; a few roam anywhere. None near the start (`avoid`) or right at a control
+// (`clearOf`). `score` is a valleyScore grid.
+export function spawnCamels({ score, n, count, rng, extent, avoid = [], route = [], clearOf = [] }) {
   if (!count) return [];
   let max = 0;
   for (const s of score) max = Math.max(max, s);
   const floor = Math.max(max, 1e-6) ** 1.5 * .02;
+  const near = Math.max(150, extent * CAMEL.routeFactor) / extent;
   const weights = new Float64Array(score.length);
   let total = 0;
   for (let i = 0; i < score.length; i++) {
-    weights[i] = Math.max(0, score[i]) ** 1.5 + floor;
-    total += weights[i];
+    let weight = Math.max(0, score[i]) ** 1.5 + floor;
+    if (route.length > 1) {
+      const cell = { u: (i % n) / (n - 1), v: Math.floor(i / n) / (n - 1) };
+      let d = Infinity;
+      for (let k = 1; k < route.length; k++) d = Math.min(d, segmentDistance(cell, route[k - 1], route[k]));
+      weight *= CAMEL.offRoute + Math.exp(-((d / near) ** 2));
+    }
+    weights[i] = weight;
+    total += weight;
   }
   const pick = () => {
     let r = rng() * total;
@@ -101,17 +123,21 @@ export function spawnCamels({ score, n, count, rng, extent, avoid = [] }) {
     return weights.length - 1;
   };
   const clear = Math.max(250, extent * CAMEL.startClear);
+  const controlClear = Math.max(80, extent * CAMEL.controlClear);
   const camels = [];
   for (let guard = 0; camels.length < count && guard < 500; guard++) {
     const cell = pick();
     const u = clamp((cell % n + rng() - .5) / (n - 1), .02, .98);
     const v = clamp((Math.floor(cell / n) + rng() - .5) / (n - 1), .02, .98);
     if (avoid.some((p) => metersBetween(p, { u, v }, extent) < clear)) continue;
+    if (clearOf.some((p) => metersBetween(p, { u, v }, extent) < controlClear)) continue;
     const herd = Math.min(count - camels.length, 1 + Math.floor(rng() * 3));
     for (let k = 0; k < herd; k++) {
       const angle = rng() * Math.PI * 2;
       const r = CAMEL.herdSpread * (k ? .4 + rng() : 0) / extent;
-      camels.push(makeCamel(clamp(u + Math.cos(angle) * r, .02, .98), clamp(v + Math.sin(angle) * r, .02, .98), rng));
+      const member = { u: clamp(u + Math.cos(angle) * r, .02, .98), v: clamp(v + Math.sin(angle) * r, .02, .98) };
+      if (k && clearOf.some((p) => metersBetween(p, member, extent) < controlClear)) continue;
+      camels.push(makeCamel(member.u, member.v, rng));
     }
   }
   return camels;

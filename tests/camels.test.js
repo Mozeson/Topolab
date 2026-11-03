@@ -38,6 +38,23 @@ test('herds spawn mostly in valleys and away from the start', () => {
   assert.deepEqual(spawnCamels({ score, n, count: 0, rng: random(1), extent }), []);
 });
 
+test('given the course, herds gather along it but clear of the controls', () => {
+  const score = valleyScore(heights, n, 4);
+  const route = [{ u: .5, v: .08 }, { u: .5, v: .5 }, { u: .5, v: .92 }]; // down the valley
+  const camels = spawnCamels({ score, n, count: 8, rng: random(4), extent, avoid: [route[0]], route, clearOf: route.slice(1) });
+  assert.equal(camels.length, 8);
+  for (const camel of camels) {
+    assert.ok(Math.abs(camel.u - .5) * extent < 400, 'near the route');
+    for (const control of route.slice(1)) assert.ok(metersBetween(camel, control, extent) >= 100 - 1e-6, 'not at a control');
+  }
+  // A course along the west slope pulls herds towards it, compared with no course at all.
+  const west = [{ u: .15, v: .1 }, { u: .15, v: .9 }];
+  const mean = (list) => list.reduce((sum, c) => sum + Math.abs(c.u - .15), 0) / list.length;
+  const near = spawnCamels({ score, n, count: 12, rng: random(8), extent, route: west });
+  const anywhere = spawnCamels({ score, n, count: 12, rng: random(8), extent });
+  assert.ok(mean(near) < mean(anywhere), `${mean(near)} vs ${mean(anywhere)}`);
+});
+
 test('a grazing camel ignores a walker far away', () => {
   const rng = random(3);
   const camel = camelAt(.5, .5, { wanderTimer: 0 });

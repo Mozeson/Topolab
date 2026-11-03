@@ -634,7 +634,8 @@ export function createNavGame(api) {
   }
 
   const lampRange = () => Math.max(60, api.extent() * .025); // metres lit ahead
-  const camelScale = () => clamp(api.extent() / 2500, 1, 2); // bigger on big maps, like the cairns
+  // Bigger on big maps, like the cairns, so a herd is visible from a few hundred metres.
+  const camelScale = () => clamp(api.extent() / 1600, 1, 3);
 
   // Stars as points on a sphere around the camera: random faint ones plus the bright stars
   // of sky.js at their real places, so Polaris marks north. Hidden behind the moon.
@@ -715,10 +716,12 @@ export function createNavGame(api) {
     const shadowGeometry = new THREE.CircleGeometry(1, 20).rotateX(-Math.PI / 2);
     const shadowMaterial = new THREE.MeshBasicMaterial({ color: 0x0b1410, transparent: true, opacity: .32, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4 });
     const list = [];
+    // Coats from sandy to dark brown: darker than the grass so a herd stands out.
+    const coats = [0x9a6b3c, 0xb07a44, 0x7e5530, 0xa8743f];
     for (let i = 0; i < count; i++) {
-      const tone = .9 + (i % 4) * .05;
-      const body = new THREE.MeshStandardMaterial({ color: new THREE.Color(0xc9a066).multiplyScalar(tone), roughness: .95, flatShading: true });
-      const legs = new THREE.MeshStandardMaterial({ color: new THREE.Color(0xa98048).multiplyScalar(tone), roughness: .95, flatShading: true });
+      const coat = new THREE.Color(coats[i % coats.length]);
+      const body = new THREE.MeshStandardMaterial({ color: coat, roughness: .95, flatShading: true });
+      const legs = new THREE.MeshStandardMaterial({ color: coat.clone().multiplyScalar(.82), roughness: .95, flatShading: true });
       const eyeMaterial = new THREE.MeshBasicMaterial({ color: 0xd9ffc8, transparent: true, opacity: 0, toneMapped: false, depthWrite: false, blending: THREE.AdditiveBlending });
       const root = new THREE.Group();
       root.add(new THREE.Mesh(torso, body));
@@ -766,7 +769,11 @@ export function createNavGame(api) {
     if (!world?.camels?.length) return;
     ensureValleyGrid();
     camelRng = random((Math.random() * 2 ** 32) >>> 0);
-    const data = spawnCamels({ score: world.valley, n: world.valleyN, count: world.camels.length, rng: camelRng, extent: api.extent(), avoid: [points[0]] });
+    // Mostly in the valleys along the course, so a navigation actually meets them.
+    const data = spawnCamels({
+      score: world.valley, n: world.valleyN, count: world.camels.length, rng: camelRng, extent: api.extent(),
+      avoid: [points[0]], route: points, clearOf: points.slice(1),
+    });
     world.camels.forEach((camel, i) => {
       camel.data = data[i] || null;
       camel.root.visible = Boolean(camel.data);
@@ -897,7 +904,7 @@ export function createNavGame(api) {
       // FPV racing mode (on top of the drone): momentum, banking, tricks.
       fpv: false, vel: { x: 0, y: 0, z: 0 }, roll: 0, fov: 92, shake: 0, maxSpeed: 0, tricks: 0, trick: null, crashes: 0, crashCool: 0, throttle: 0, boosting: false,
       // Camels (camels.js): catches cost time and leave you stunned for a moment.
-      stun: 0, camelCatches: 0, camelEscapes: 0, chases: 0, camelTalk: -99, camelFlash: -99,
+      stun: 0, camelCatches: 0, camelEscapes: 0, chases: 0, camelTalk: -99, camelFlash: -99, camelSpotted: false,
       // Dusk / night (sky.js): a sky clock that runs as fast as the walking (≥ ×12).
       night: timeOption !== 'day', clock: startClockFor(), startClock: startClockFor(),
       timeScale: clamp(baseSpeed(api.extent()) / 1.4, 12, 30), lamp: false, lampHinted: false, skyTimer: 0, sky: null,
@@ -1089,10 +1096,18 @@ export function createNavGame(api) {
     let nearest = null;
     if (world?.camels?.length && !run.drone) {
       const extent = api.extent();
+      let closest = null;
       for (const camel of world.camels) {
-        if (!camel.data || camel.data.state !== 'chase') continue;
+        if (!camel.data) continue;
         const d = metersBetween(camel.data, api.observer, extent);
+        if (!closest || d < closest.d) closest = { camel: camel.data, d };
+        if (camel.data.state !== 'chase') continue;
         if (!nearest || d < nearest.d) nearest = { camel: camel.data, d };
+      }
+      // The first herd you come near: say where it is, once per run.
+      if (!run.camelSpotted && closest && closest.d < detectRadius(extent) * 2.2 && phase === 'running') {
+        run.camelSpotted = true;
+        flash(`🐪 גמלים ב${directionName(bearingDegrees(api.observer, closest.camel))}, ${Math.round(closest.d)} מ׳ מכם. בהליכה הם ישיגו אתכם, בריצה לא`);
       }
     }
     chip.hidden = !nearest;
@@ -2114,7 +2129,8 @@ export function createNavGame(api) {
       drone: { active: run.drone, landing: run.landing, used: run.droneUsed, agl: run.drone ? droneAgl() : 0, battery: run.battery, flown: run.flown,
         fpv: run.fpv, speedKmh: Math.round(run.droneSpeed * 3.6), maxKmh: Math.round(run.maxSpeed * 3.6), tricks: run.tricks, crashes: run.crashes, fov: run.fov, roll: api.observer.roll || 0 },
       camels: (world?.camels || []).filter((camel) => camel.data).map((camel) => ({ u: camel.data.u, v: camel.data.v, state: camel.data.state, distance: metersBetween(camel.data, api.observer, api.extent()) })),
-      camelCatches: run.camelCatches, camelEscapes: run.camelEscapes, stun: run.stun, penalty: penaltySeconds(),
+      camelCatches: run.camelCatches, camelEscapes: run.camelEscapes, camelSpotted: run.camelSpotted, stun: run.stun, penalty: penaltySeconds(),
+      route: points.map(({ u, v }) => ({ u, v })),
       night: run.night ? { clock: run.clock, lamp: run.lamp, dark: run.sky?.dark, moonlight: run.sky?.moonlight, moonAlt: run.sky?.moonAlt, moonAz: run.sky?.moonAz, sunAlt: run.sky?.sunAlt, phase: run.sky?.phase.name, stars: run.sky?.stars } : null,
     } : { phase }),
   };
