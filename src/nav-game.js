@@ -208,6 +208,15 @@ export function createNavGame(api) {
     input.checked = input.value === quality;
     input.addEventListener('change', () => { quality = input.value; writeStorage('topolab-nav-quality', quality); });
   });
+  // Walking pace in the field: real (5 km/h) up to the old game speed (map side / 150 per s).
+  const PACES = { real: 1.4, x3: 4.2, x6: 8.4, game: null };
+  let paceOption = readStorage('topolab-nav-pace', 'x6');
+  if (!(paceOption in PACES)) paceOption = 'x6';
+  document.querySelectorAll('input[name="navPace"]').forEach((input) => {
+    input.checked = input.value === paceOption;
+    input.addEventListener('change', () => { paceOption = input.value; writeStorage('topolab-nav-pace', paceOption); });
+  });
+  const walkSpeed = () => PACES[paceOption] ?? baseSpeed(api.extent());
   const startClockFor = () => (timeOption === 'dusk' ? DUSK_START : timeOption === 'night' ? startHour : 12);
 
   // The moon in the briefing: its phase, and where it will be when you set out.
@@ -1008,7 +1017,7 @@ export function createNavGame(api) {
       stun: 0, camelCatches: 0, camelEscapes: 0, chases: 0, camelTalk: -99, camelFlash: -99, camelSpotted: false,
       // Dusk / night (sky.js): a sky clock that runs as fast as the walking (≥ ×12).
       night: timeOption !== 'day', clock: startClockFor(), startClock: startClockFor(),
-      timeScale: clamp(baseSpeed(api.extent()) / 1.4, 12, 30), lamp: false, lampHinted: false, skyTimer: 0, sky: null,
+      timeScale: clamp(walkSpeed() / 1.4, 12, 30), lamp: false, lampHinted: false, skyTimer: 0, sky: null,
       // Realism: wind (wind.js), effort (effort.js), steps and breaths.
       wind: createWind(random((Math.random() * 2 ** 32) >>> 0)), windState: null, clock2: 0,
       fatigue: 0, breathClock: 2, gruntClock: 0, lastStep: 0, dustClock: 0,
@@ -1109,7 +1118,7 @@ export function createNavGame(api) {
     const o = api.observer;
     const extent = api.extent();
     const ctx = {
-      dt, extent, walkSpeed: baseSpeed(extent), rng: camelRng,
+      dt, extent, walkSpeed: walkSpeed(), rng: camelRng,
       player: { u: o.u, v: o.v, onFoot: !run.drone, visibility: camelVisibility() },
       heightAt: api.height,
       scoreAt: (u, v) => sampleGrid(world.valley, world.valleyN, u, v),
@@ -1154,7 +1163,7 @@ export function createNavGame(api) {
     const vs = api.verticalScale();
     const mtw = api.metersToWorld();
     const scale = camelScale();
-    const walk = baseSpeed(api.extent());
+    const walk = walkSpeed();
     const camera = api.camera();
     const lampOn = run?.night && run.lamp;
     if (lampOn) camera.getWorldDirection(viewDir);
@@ -2366,7 +2375,7 @@ export function createNavGame(api) {
           run.pace = slopeSpeedFactor(run.grade) * (run.ground?.speed ?? 1);
           // Into the wind is slower, with it a little faster; a spent runner slows down.
           const windFactor = run.windState ? windSpeedFactor(run.windState, o.heading + (dir < 0 ? 180 : 0)) : 1;
-          const speed = baseSpeed(extent) * (running ? RUN_FACTOR * runFactor(run.fatigue) : 1) * (dir < 0 ? BACK_FACTOR : 1) * input * run.pace * windFactor;
+          const speed = walkSpeed() * (running ? RUN_FACTOR * runFactor(run.fatigue) : 1) * (dir < 0 ? BACK_FACTOR : 1) * input * run.pace * windFactor;
           const nu = clamp(o.u + dx * speed * dt / extent, .002, .998);
           const nv = clamp(o.v + dy * speed * dt / extent, .002, .998);
           const step = distanceMeters(o, { u: nu, v: nv }, extent);
@@ -2376,7 +2385,8 @@ export function createNavGame(api) {
           run.walked += step;
           run.legWalked += step;
           if (rise > 0) { run.ascent += rise; run.legAscent += rise; }
-          run.bob += step / (running ? 1.9 : 1.4);
+          // A natural cadence (≤ 2 steps/s walking, 3 running): faster game speeds take longer strides.
+          run.bob += step / Math.max(running ? 1.9 : 1.4, (speed / (running ? 3 : 2)) || 1);
           o.bob = Math.sin(run.bob * Math.PI) * (running ? .07 : .045);
           // A footstep each half cycle of the bob, sounding like the ground underfoot.
           if (Math.floor(run.bob) !== run.lastStep) {
