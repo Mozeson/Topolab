@@ -10,6 +10,7 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { surfaceTextures } from './field-models.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 
 const BASE = `${import.meta.env?.BASE_URL ?? '/'}assets/field/`;
@@ -79,10 +80,20 @@ export function createFieldEngine({ renderer, scene, camera, terrainUniforms, me
     sunKnown = sunDir.y > .1;
   }
 
-  function load() {
+  // Progress listeners (the loading screen): called with (done, total) as files arrive.
+  const listeners = new Set();
+  let done = 0;
+  const TOTAL = LAYERS.length * 2 + 5;
+  const tick = (value) => { done++; listeners.forEach((fn) => fn(done, TOTAL)); return value; };
+
+  function load(onProgress) {
+    if (onProgress) {
+      if (done >= TOTAL) onProgress(TOTAL, TOTAL);
+      else listeners.add(onProgress);
+    }
     if (loading) return loading;
     loading = (async () => {
-      const maps = await Promise.all(LAYERS.flatMap(([, stem]) => [texture(`${stem}_diff_1k.jpg`, true), texture(`${stem}_nor_gl_1k.jpg`, false)]));
+      const maps = await Promise.all(LAYERS.flatMap(([, stem]) => [texture(`${stem}_diff_1k.jpg`, true).then(tick), texture(`${stem}_nor_gl_1k.jpg`, false).then(tick)]));
       if (maps.every(Boolean)) {
         LAYERS.forEach(([name], i) => {
           terrainUniforms[`u${name}Map`].value = maps[i * 2];
@@ -90,9 +101,18 @@ export function createFieldEngine({ renderer, scene, camera, terrainUniforms, me
         });
         terrainUniforms.uTexReady.value = 1;
       }
-      skyTexture = await texture('sky_4k.jpg', true);
+      // Rocks share the limestone; plants get leaves and bark (field-models.js addSurface).
+      const [leaf, bark] = await Promise.all([texture('forest_leaves_03_diff_1k.jpg', true).then(tick), texture('jolcham_oak_bark_01_diff_1k.jpg', true).then(tick)]);
+      if (maps[4] && maps[5] && leaf && bark) {
+        surfaceTextures.rockMap.value = maps[4];
+        surfaceTextures.rockNormal.value = maps[5];
+        surfaceTextures.leafMap.value = leaf;
+        surfaceTextures.barkMap.value = bark;
+        surfaceTextures.ready.value = 1;
+      }
+      skyTexture = tick(await texture('sky_4k.jpg', true));
       if (skyTexture) skyTexture.mapping = THREE.EquirectangularReflectionMapping;
-      const hdr = await new Promise((resolve) => new HDRLoader().load(BASE + 'sky_1k.hdr', resolve, undefined, () => resolve(null)));
+      const hdr = tick(await new Promise((resolve) => new HDRLoader().load(BASE + 'sky_1k.hdr', resolve, undefined, () => resolve(null))));
       if (hdr) {
         findSun(hdr);
         hdr.mapping = THREE.EquirectangularReflectionMapping;
@@ -101,6 +121,8 @@ export function createFieldEngine({ renderer, scene, camera, terrainUniforms, me
         pmrem.dispose();
         hdr.dispose();
       }
+      tick();
+      listeners.clear();
       if (active) apply();
     })();
     return loading;
@@ -139,7 +161,7 @@ export function createFieldEngine({ renderer, scene, camera, terrainUniforms, me
 
   return {
     get active() { return active; },
-    get usesPost() { return active && full && day && Boolean(composer); },
+    get usesPost() { return active && full && Boolean(composer); },
     get realSky() { return active && day && Boolean(skyTexture); },
     get sunDirection() { return sunKnown ? sunDir : null; },
     preload: load,
@@ -149,8 +171,15 @@ export function createFieldEngine({ renderer, scene, camera, terrainUniforms, me
       day = isDay;
       full = quality === 'full';
       if (full && !composer) buildComposer();
-      // Occlusion radius in real metres (the world is scaled to the map).
-      if (passes) passes.ao.updateGtaoMaterial({ radius: 2.5 * metersToWorld(), thickness: 1.2 * metersToWorld() });
+      // Occlusion radius in real metres (the world is scaled to the map). At dusk and night
+      // only the glow (moon, torch) and a gentler grade: occlusion would just blacken the dark.
+      if (passes) {
+        passes.ao.updateGtaoMaterial({ radius: 2.5 * metersToWorld(), thickness: 1.2 * metersToWorld() });
+        passes.ao.enabled = isDay;
+        passes.grade.uniforms.uAmount.value = isDay ? 1 : .35;
+        passes.bloom.strength = isDay ? .22 : .5;
+        passes.bloom.threshold = isDay ? .92 : .75;
+      }
       load();
       apply();
     },

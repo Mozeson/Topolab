@@ -15,16 +15,37 @@ export const windUniforms = {
   uMetersPerUnit: { value: 400 },
 };
 
+// Photographed surfaces (field-engine.js loads them): limestone for rocks, leaves for
+// crowns and shrubs, bark for trunks. Until they arrive `ready` is 0 and nothing changes.
+export const surfaceTextures = {
+  rockMap: { value: null }, rockNormal: { value: null }, leafMap: { value: null }, barkMap: { value: null }, ready: { value: 0 },
+};
+
 // Bend vertices downwind, more towards the top (local y / height), with a flutter and gust
 // waves rolling across the field. Works for plain and instanced meshes.
 export function addWindSway(material, { height = 1, amount = .1, key = 'sway' } = {}) {
-  const reach = (amount * height).toFixed(4);
+  material.userData.sway = { height, amount, key };
+  return installShader(material);
+}
+
+// Texture a material from three sides in world metres: 'rock' (colour + relief) or
+// 'plant' (leaf detail on green, bark on brown vertices).
+export function addSurface(material, kind) {
+  material.userData.surface = kind;
+  return installShader(material);
+}
+
+function installShader(material) {
+  const sway = material.userData.sway;
+  const surface = material.userData.surface;
   material.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, windUniforms);
-    shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', `#include <common>
-        uniform float uTime; uniform vec2 uWindDir; uniform float uWindStrength; uniform float uMetersPerUnit;`)
-      .replace('#include <begin_vertex>', `#include <begin_vertex>
+    let vs = shader.vertexShader.replace('#include <common>', `#include <common>
+      uniform float uTime; uniform vec2 uWindDir; uniform float uWindStrength; uniform float uMetersPerUnit;
+      varying vec3 vSurfPos; varying vec3 vSurfNormal;`);
+    if (sway) {
+      const reach = (sway.amount * sway.height).toFixed(4);
+      vs = vs.replace('#include <begin_vertex>', `#include <begin_vertex>
         {
           #ifdef USE_INSTANCING
             vec3 swayRoot = vec3(instanceMatrix[3]);
@@ -36,14 +57,62 @@ export function addWindSway(material, { height = 1, amount = .1, key = 'sway' } 
           vec2 rootM = swayRoot.xz * uMetersPerUnit;
           float wave = sin(dot(rootM, uWindDir) / 23.0 - uTime * 2.6) * .5 + .5;
           float flutter = sin(uTime * 3.7 + rootM.x * .37 + rootM.y * .21);
-          float bend = pow(clamp(position.y / ${height.toFixed(3)}, 0.0, 1.0), 1.6);
+          float bend = pow(clamp(position.y / ${sway.height.toFixed(3)}, 0.0, 1.0), 1.6);
           float push = uWindStrength * (.55 + .7 * wave) + flutter * .18 * (.3 + uWindStrength);
           vec3 windLocal = normalize(transpose(swayRot) * vec3(uWindDir.x, 0.0, uWindDir.y) + vec3(1e-5));
           transformed += windLocal * push * bend * ${reach};
           transformed.y -= push * push * bend * ${reach} * .35;
         }`);
+    }
+    vs = vs.replace('#include <project_vertex>', `#include <project_vertex>
+      #ifdef USE_INSTANCING
+        vSurfPos = (modelMatrix * instanceMatrix * vec4(transformed, 1.0)).xyz;
+        vSurfNormal = normalize(mat3(modelMatrix) * mat3(instanceMatrix) * objectNormal);
+      #else
+        vSurfPos = (modelMatrix * vec4(transformed, 1.0)).xyz;
+        vSurfNormal = normalize(mat3(modelMatrix) * objectNormal);
+      #endif`);
+    shader.vertexShader = vs;
+    if (surface) {
+      Object.assign(shader.uniforms, { uRockMap: surfaceTextures.rockMap, uRockNormal: surfaceTextures.rockNormal, uLeafMap: surfaceTextures.leafMap, uBarkMap: surfaceTextures.barkMap, uSurfReady: surfaceTextures.ready });
+      let fs = shader.fragmentShader.replace('#include <common>', `#include <common>
+        uniform float uMetersPerUnit; uniform float uSurfReady;
+        uniform sampler2D uRockMap; uniform sampler2D uRockNormal; uniform sampler2D uLeafMap; uniform sampler2D uBarkMap;
+        varying vec3 vSurfPos; varying vec3 vSurfNormal;
+        vec3 surfTri(sampler2D map, vec3 p, vec3 w) { return texture2D(map, p.zy).rgb * w.x + texture2D(map, p.xz).rgb * w.y + texture2D(map, p.xy).rgb * w.z; }`);
+      if (surface === 'rock') {
+        fs = fs.replace('#include <color_fragment>', `#include <color_fragment>
+          vec3 surfW = pow(abs(normalize(vSurfNormal)), vec3(4.0)); surfW /= surfW.x + surfW.y + surfW.z;
+          vec3 surfP = vSurfPos * uMetersPerUnit / 2.4;
+          if (uSurfReady > 0.5) diffuseColor.rgb *= surfTri(uRockMap, surfP, surfW) * 1.7;`)
+          .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+          if (uSurfReady > 0.5) {
+            vec3 rx = texture2D(uRockNormal, surfP.zy).xyz * 2.0 - 1.0;
+            vec3 ry = texture2D(uRockNormal, surfP.xz).xyz * 2.0 - 1.0;
+            vec3 rz = texture2D(uRockNormal, surfP.xy).xyz * 2.0 - 1.0;
+            vec3 bump = vec3(0.0, rx.y, rx.x) * surfW.x + vec3(ry.x, 0.0, ry.y) * surfW.y + vec3(rz.x, rz.y, 0.0) * surfW.z;
+            normal = normalize((viewMatrix * vec4(normalize(normalize(vSurfNormal) + bump * 1.2), 0.0)).xyz);
+          }`);
+      } else {
+        fs = fs.replace('#include <color_fragment>', `#include <color_fragment>
+          if (uSurfReady > 0.5) {
+            vec3 surfW = pow(abs(normalize(vSurfNormal)), vec3(4.0)); surfW /= surfW.x + surfW.y + surfW.z;
+            vec3 surfP = vSurfPos * uMetersPerUnit;
+            #ifdef USE_COLOR
+              float bark = step(vColor.g, vColor.r);
+            #else
+              float bark = 0.0;
+            #endif
+            vec3 leaf = surfTri(uLeafMap, surfP / 1.1, surfW);
+            float leafDetail = dot(leaf, vec3(.3, .5, .2)) * 2.6;
+            vec3 barkT = surfTri(uBarkMap, surfP / .9, surfW) * 2.0;
+            diffuseColor.rgb *= mix(vec3(mix(.8, 1.4, clamp(leafDetail, 0.0, 1.0))), barkT, bark);
+          }`);
+      }
+      shader.fragmentShader = fs;
+    }
   };
-  material.customProgramCacheKey = () => `wind-${key}`;
+  material.customProgramCacheKey = () => `field-${sway ? sway.key : 'still'}-${surface || 'plain'}`;
   return material;
 }
 

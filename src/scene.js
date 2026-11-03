@@ -738,7 +738,8 @@ let shadowCatcher = null;
 let fillLight = null;
 let hemiLight = null;
 let overlayRender = null;
-let fieldEngine = null; // engine v2 (field-engine.js), game mode only // nav-game.js: the walker's hands, drawn over the field (own near plane)
+let fieldEngine = null; // engine v2 (field-engine.js), game mode only
+let renderPaused = false; // behind the loading screen: don't draw frames nobody sees // nav-game.js: the walker's hands, drawn over the field (own near plane)
 // Night navigation (nav-game.js + sky.js) recolours the fog; the drone only moves it out.
 let gameFog = null; // { color: [r, g, b] sRGB, scale } or null for the daytime haze
 let skirtUniforms = null;
@@ -849,6 +850,7 @@ function installContourShader(material) {
     uExaggeration: { value: 1 },   // the field's vertical exaggeration: ground types follow the real slope
     // Engine v2 (field-engine.js): photographed materials, once loaded.
     uTexReady: { value: 0 },
+    uTexGain: { value: 1.12 },     // photographed albedo is darker: more gain where the photo sky doesn't light it
     uGrassMap: { value: null }, uGrassNormal: { value: null },
     uSoilMap: { value: null }, uSoilNormal: { value: null },
     uRockMap: { value: null }, uRockNormal: { value: null },
@@ -871,12 +873,20 @@ function installContourShader(material) {
         uniform float uHalfWorld;
         uniform float uExaggeration;
         uniform float uTexReady;
+        uniform float uTexGain;
         uniform sampler2D uGrassMap; uniform sampler2D uGrassNormal;
         uniform sampler2D uSoilMap; uniform sampler2D uSoilNormal;
         uniform sampler2D uRockMap; uniform sampler2D uRockNormal;
         varying vec3 vGroundNormal;
         vec3 rockTriplanar(sampler2D map, vec3 p, vec3 w) {
           return texture2D(map, p.zy).rgb * w.x + texture2D(map, p.xz).rgb * w.y + texture2D(map, p.xy).rgb * w.z;
+        }
+        // Normal-map detail from three projections, as a world-space offset to the normal.
+        vec3 triplanarBump(sampler2D map, vec3 p, vec3 w) {
+          vec3 x = texture2D(map, p.zy).xyz * 2.0 - 1.0;
+          vec3 y = texture2D(map, p.xz).xyz * 2.0 - 1.0;
+          vec3 z = texture2D(map, p.xy).xyz * 2.0 - 1.0;
+          return vec3(0.0, x.y, x.x) * w.x + vec3(y.x, 0.0, y.y) * w.y + vec3(z.x, z.y, 0.0) * w.z;
         }
         float groundHash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
         float groundNoise(vec2 p) {
@@ -931,15 +941,15 @@ function installContourShader(material) {
             texM = m;
             texRock = rock;
             texSoil = soil;
-            texP = vec3(m.x, vTerrainHeight * uExaggeration, m.y) / 7.0;
+            texP = vec3(m.x, vTerrainHeight * uExaggeration, m.y);
             texW = pow(abs(normalize(vGroundNormal)), vec3(4.0));
             texW /= texW.x + texW.y + texW.z;
-            vec3 grassT = mix(texture2D(uGrassMap, m / 9.0).rgb, texture2D(uGrassMap, m / 47.0 + .37).rgb, .45 + (large - .5) * .5);
-            vec3 soilT = mix(texture2D(uSoilMap, m / 6.0).rgb, texture2D(uSoilMap, m / 31.0 + .61).rgb, .5);
-            soilT = mix(vec3(dot(soilT, vec3(.3, .5, .2))), soilT, .75) * 1.08; // a less painted red
-            vec3 rockT = rockTriplanar(uRockMap, texP, texW) * 1.05;
+            // All layers projected from three sides: the exaggerated slopes don't smear.
+            vec3 grassT = mix(rockTriplanar(uGrassMap, texP / 9.0, texW), texture2D(uGrassMap, m / 47.0 + .37).rgb, .4 + (large - .5) * .5);
+            vec3 soilT = rockTriplanar(uSoilMap, texP / 6.0, texW);
+            vec3 rockT = rockTriplanar(uRockMap, texP / 7.0, texW) * 1.05;
             grassT *= mix(vec3(1.0), vec3(1.06, 1.0, .82), smoothstep(.3, .8, large)); // drier patches
-            ground = mix(mix(grassT, soilT, soil), rockT, rock) * 1.12;
+            ground = mix(mix(grassT, soilT, soil), rockT, rock) * uTexGain;
             groundRelief = 0.0;
           }
           diffuseColor.rgb = mix(ground, diffuseColor.rgb * ground * 2.4, .22);
@@ -971,19 +981,15 @@ function installContourShader(material) {
         if (uDetail > 0.5 && uTexReady < 0.5) normal = groundBump(-vViewPosition, normal, groundRelief);
         if (uDetail > 0.5 && uTexReady > 0.5) {
           vec3 nGeo = normalize(vGroundNormal);
-          vec3 ng = texture2D(uGrassNormal, texM / 9.0).xyz * 2.0 - 1.0;
-          vec3 ns = texture2D(uSoilNormal, texM / 6.0).xyz * 2.0 - 1.0;
-          vec3 tp = mix(ng, ns, texSoil);
-          vec3 nPlanar = normalize(nGeo + vec3(tp.x, 0.0, tp.y) * .9);
-          vec3 rx = texture2D(uRockNormal, texP.zy).xyz * 2.0 - 1.0;
-          vec3 ry = texture2D(uRockNormal, texP.xz).xyz * 2.0 - 1.0;
-          vec3 rz = texture2D(uRockNormal, texP.xy).xyz * 2.0 - 1.0;
-          vec3 nRock = normalize(nGeo + (vec3(0.0, rx.y, rx.x) * texW.x + vec3(ry.x, 0.0, ry.y) * texW.y + vec3(rz.x, rz.y, 0.0) * texW.z) * 1.1);
+          vec3 bump = mix(triplanarBump(uGrassNormal, texP / 9.0, texW), triplanarBump(uSoilNormal, texP / 6.0, texW), texSoil);
+          bump = mix(bump, triplanarBump(uRockNormal, texP / 7.0, texW) * 1.2, texRock);
+          vec3 nPlanar = normalize(nGeo + bump * .9);
+          vec3 nRock = nPlanar;
           normal = normalize((viewMatrix * vec4(normalize(mix(nPlanar, nRock, texRock)), 0.0)).xyz);
         }
       `);
   };
-  material.customProgramCacheKey = () => 'terrain-contour-v6';
+  material.customProgramCacheKey = () => 'terrain-contour-v7';
 }
 
 function initThree() {
@@ -1096,7 +1102,7 @@ function initThree() {
       }
       const moved = state.observer.firstPerson ? false : controls.update();
       if (moved || needsRender) updateCompass();
-      if (moved || needsRender) {
+      if ((moved || needsRender) && !renderPaused) {
         if (!fieldEngine?.render()) renderer.render(scene, camera);
         overlayRender?.(renderer, camera);
         needsRender = false;
@@ -2238,6 +2244,7 @@ function setGameLighting(sky) {
     if (hemiLight) hemiLight.intensity = real ? .55 : 1.15;
     if (fillLight) fillLight.intensity = real ? .1 : .35;
     renderer.toneMappingExposure = real ? 1.0 : .96;
+    if (contourUniforms) contourUniforms.uTexGain.value = real ? 1.12 : 1.9;
   } else {
     const { dir, intensity, color } = sky.key;
     sunLight.color.setRGB(...color, THREE.SRGBColorSpace);
@@ -2254,6 +2261,7 @@ function setGameLighting(sky) {
     }
     if (fillLight) fillLight.intensity = sky.fill;
     renderer.toneMappingExposure = sky.exposure;
+    if (contourUniforms) contourUniforms.uTexGain.value = 1.9;
     gameFog = sky.fog;
   }
   applyGameFog();
@@ -3153,8 +3161,19 @@ navGame = createNavGame({
   // Dusk / night (sky.js skyState) or null to restore daylight.
   setLighting: setGameLighting,
   // Engine v2: start loading the field's materials and sky early; is the photographed sky on?
-  preloadEngine: () => fieldEngine?.preload(),
+  preloadEngine: (onProgress) => fieldEngine?.preload(onProgress),
+  // Compile every shader of the field now (behind the loading screen), then draw one frame.
+  pauseRender: (on) => { renderPaused = on; needsRender = true; },
+  compileField: async () => {
+    if (!renderer || !scene || !camera) return;
+    updateObserverCamera();
+    if (renderer.compileAsync) await renderer.compileAsync(scene, camera);
+    if (!fieldEngine?.render()) renderer.render(scene, camera);
+    needsRender = true;
+  },
   hasRealSky: () => Boolean(fieldEngine?.realSky),
+  postActive: () => Boolean(fieldEngine?.usesPost),
+  exposure: () => renderer?.toneMappingExposure ?? 1,
   // First-person hands etc.: a callback drawn after the field each frame (or null).
   setOverlay: (fn) => { overlayRender = fn; needsRender = true; },
   invalidate: () => { needsRender = true; },

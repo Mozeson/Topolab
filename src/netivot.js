@@ -4,14 +4,14 @@
 
 import * as THREE from 'three';
 import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
-import { rockGeometry } from './field-models.js';
+import { rockGeometry, addSurface } from './field-models.js';
 
 const hash = (x, y, z) => { const s = Math.sin(x * 127.1 + y * 311.7 + z * 74.7) * 43758.5453; return s - Math.floor(s); };
 
 // ——— In the field: a limestone mound with a dark mouth facing −z ———
 export function createCaveMound() {
   const group = new THREE.Group();
-  const rock = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .92 });
+  const rock = addSurface(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .92 }), 'rock');
   const mound = new THREE.Mesh(rockGeometry(11.3, 2), rock);
   mound.scale.set(7, 5.5, 4.2);
   mound.position.y = -1.2;

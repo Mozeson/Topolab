@@ -10,7 +10,7 @@ import {
 import { readCoordinate, formatCoordinate } from './grid-coords.js';
 import { DRONE, FPV, stepAltitude, stepLanding, stepBattery, canReadNote, feedCheat, fpvTopSpeed, fpvVelocity, fpvGround, terrainAhead } from './drone.js';
 import {
-  windUniforms, addWindSway, pineGeometry, oakGeometry, shrubGeometry, rockGeometry, grassTuftGeometry,
+  windUniforms, addWindSway, addSurface, pineGeometry, oakGeometry, shrubGeometry, rockGeometry, grassTuftGeometry,
   createCamel, poseCamel, createHands, createDust,
 } from './field-models.js';
 import { createFieldAudio } from './field-audio.js';
@@ -47,6 +47,32 @@ const HOUR_KEY = 'topolab-nav-start-hour';
 const TIME_OPTIONS = ['day', 'dusk', 'night'];
 const NIGHT_HOURS = [19, 20, 21, 22, 23, 24, 25, 26, 27, 28]; // 19:00 … 04:00 on the evening clock (sky.js)
 const DUSK_START = 17 + 40 / 60; // twenty minutes before sunset
+const POST_INVERSE_GLSL = `
+  uniform float uPostLinear; uniform float uPostExposure;
+  uniform mat3 uAcesInInv; uniform mat3 uAcesOutInv;
+  float srgbToLin(float c) { return c <= .04045 ? c / 12.92 : pow((c + .055) / 1.055, 2.4); }
+  float rrtInverse(float y) {
+    y = clamp(y, 0.0, .995);
+    float a = .983729 * y - 1.0;
+    float b = .432951 * y - .0245786;
+    float c = .238081 * y + .000090537;
+    return (-b - sqrt(max(b * b - 4.0 * a * c, 0.0))) / (2.0 * a);
+  }
+  // The colour that, tone-mapped and encoded by OutputPass, shows as \`display\`.
+  vec3 postLinear(vec3 display) {
+    if (uPostLinear < .5) return display;
+    vec3 lin = vec3(srgbToLin(display.r), srgbToLin(display.g), srgbToLin(display.b));
+    vec3 y = uAcesOutInv * lin;
+    vec3 v = vec3(rrtInverse(y.r), rrtInverse(y.g), rrtInverse(y.b));
+    return max(uAcesInInv * v * .6 / max(uPostExposure, 1e-3), 0.0);
+  }`;
+// three.js ACES matrices (column-major, as in its shader chunk), inverted once.
+const acesIn = new THREE.Matrix3().set(.59719, .35458, .04823, .07600, .90834, .01566, .02840, .13383, .83777);
+const acesOut = new THREE.Matrix3().set(1.60475, -.53108, -.07367, -.10208, 1.10813, -.00605, -.00327, -.07276, 1.07602);
+export const postUniforms = {
+  uPostLinear: { value: 0 }, uPostExposure: { value: 1 },
+  uAcesInInv: { value: acesIn.clone().invert() }, uAcesOutInv: { value: acesOut.clone().invert() },
+};
 export const CAMEL_PENALTY = 20; // seconds added when a camel catches you
 const LAMP_INTENSITY = 3.6;  // headlamp beam (decay 0: even light out to its range)
 const SPILL_INTENSITY = .6;  // its soft spill around your feet
@@ -278,6 +304,35 @@ export function createNavGame(api) {
   $('cancelNavSetupBtn').addEventListener('click', () => setupDialog.close());
   setupDialog.addEventListener('click', (event) => { if (event.target === setupDialog) setupDialog.close(); });
   $('goNavBtn').addEventListener('click', () => { setupDialog.close(); start(); });
+
+  // ——— Loading screen: something to read while the field is built and the GPU warms up ———
+  const LOADING_FILLERS = [
+    'מחפש את הקשר…', 'סופר מימיות…', 'מסדר את הרוג׳ומים…', 'מחלק מצפנים…', 'מחכה לאישור קב״ט…',
+    'שותה קפה שחור…', 'מתווכח על הנ״צ…', 'מחפש את שקית הסוכריות…', 'מאחר לתדריך בעשר דקות…', 'מקפל את המפה בחזרה…',
+  ];
+  const nextPaint = () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  function showLoading() {
+    const box = $('navLoading');
+    let last = performance.now();
+    let filler = Math.floor(Math.random() * LOADING_FILLERS.length);
+    box.hidden = false;
+    const set = (fraction, text) => {
+      $('navLoadingBar').style.width = `${Math.round(Math.min(1, fraction) * 100)}%`;
+      if (text) { $('navLoadingText').textContent = text; last = performance.now(); }
+    };
+    // A long wait gets a funny filler line instead of a frozen message.
+    const timer = setInterval(() => {
+      if (performance.now() - last < 1700) return;
+      filler = (filler + 1) % LOADING_FILLERS.length;
+      $('navLoadingText').textContent = LOADING_FILLERS[filler];
+      last = performance.now();
+    }, 400);
+    return {
+      set,
+      async step(fraction, text) { set(fraction, text); await nextPaint(); },
+      hide() { clearInterval(timer); box.hidden = true; },
+    };
+  }
 
   // ——— Map rendering (briefing, in-game card, replay) ———
   function buildMapBase(size) {
@@ -545,11 +600,13 @@ export function createNavGame(api) {
           moonHalo: { value: 0 },
           moonCos: { value: Math.cos(1.1 * Math.PI / 180) },
           moonSin: { value: Math.sin(1.1 * Math.PI / 180) },
+          ...postUniforms,
         },
         vertexShader: 'varying vec3 vDir; void main(){ vDir = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
         fragmentShader: `uniform vec3 top; uniform vec3 horizon; uniform vec3 bottom; uniform vec3 glow; uniform vec3 sun; uniform float sunDisc;
           uniform vec3 moon; uniform float moonDisc; uniform float moonHalo; uniform float moonCos; uniform float moonSin;
           varying vec3 vDir;
+          ${POST_INVERSE_GLSL}
           void main(){
             vec3 d = normalize(vDir);
             float h = d.y;
@@ -572,7 +629,7 @@ export function createNavGame(api) {
               vec3 surface = mix(vec3(.04, .05, .08), vec3(.98, .96, .88) * (.8 + .2 * sqrt(1.0 - r2)) * (1.0 - sea), lit);
               c += surface * moonDisc * (1.0 - smoothstep(.9, 1.0, sqrt(r2)));
             }
-            gl_FragColor = vec4(c, 1.0);
+            gl_FragColor = vec4(postLinear(c), 1.0);
           }`,
       }),
     );
@@ -590,15 +647,15 @@ export function createNavGame(api) {
     const lite = quality === 'light'; // phones: lighter scenery
     const treeCount = Math.min(lite ? 600 : 1200, Math.round(70 * area));
     const vegetation = (geometry, height, amount, key) => {
-      const material = addWindSway(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .95 }), { height, amount, key });
+      const material = addSurface(addWindSway(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .95 }), { height, amount, key }), 'plant');
       return { geometry, material };
     };
     const shrubKind = vegetation(shrubGeometry(), 1, .06, 'shrub');
     // Trees and rocks: split into chunks so the engine can skip what is out of view (and out of
     // the shadow area), with a low-detail model for chunks far away (see updateChunkDetail).
-    const pineMaterial = addWindSway(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .95 }), { height: 6, amount: .035, key: 'pine' });
-    const oakMaterial = addWindSway(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .95 }), { height: 4, amount: .03, key: 'oak' });
-    const rockMaterial = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .9 });
+    const pineMaterial = addSurface(addWindSway(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .95 }), { height: 6, amount: .035, key: 'pine' }), 'plant');
+    const oakMaterial = addSurface(addWindSway(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .95 }), { height: 4, amount: .03, key: 'oak' }), 'plant');
+    const rockMaterial = addSurface(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .9 }), 'rock');
     const shrubs = new THREE.InstancedMesh(shrubKind.geometry, shrubKind.material, lite ? 320 : 640);
     const matrix = new THREE.Matrix4();
     const quaternion = new THREE.Quaternion();
@@ -752,6 +809,7 @@ export function createNavGame(api) {
         moon: { value: new THREE.Vector3(0, -1, 0) },
         moonCos: { value: Math.cos(1.5 * Math.PI / 180) },
         scale: { value: Math.min(window.devicePixelRatio || 1, 2) },
+        ...postUniforms,
       },
       vertexShader: `attribute float size; attribute vec3 starColor; uniform vec3 moon; uniform float moonCos; uniform float scale; varying vec3 vColor;
         void main() {
@@ -762,7 +820,8 @@ export function createNavGame(api) {
           gl_Position = projectionMatrix * viewMatrix * world;
         }`,
       fragmentShader: `uniform float opacity; varying vec3 vColor;
-        void main() { float d = length(gl_PointCoord - .5); gl_FragColor = vec4(vColor * opacity * smoothstep(.5, .15, d), 1.0); }`,
+        ${POST_INVERSE_GLSL}
+        void main() { float d = length(gl_PointCoord - .5); gl_FragColor = vec4(postLinear(min(vColor * opacity * smoothstep(.5, .15, d), vec3(.99))), 1.0); }`,
     });
     const points = new THREE.Points(geometry, material);
     points.frustumCulled = false;
@@ -1527,20 +1586,39 @@ export function createNavGame(api) {
     flash('😵 …ושוב אתם ליד המערה. מה זה היה?');
   }
 
-  function start() {
-    if (!course || points.length < 3) return;
-    api.enter({ exaggeration: relief, quality, isDay: timeOption === 'day' });
-    disposeWorld();
-    world = buildWorld();
-    hands ||= createHands();
-    buildCompass();
-    syncSoundButton();
-    resetRun();
+  let starting = false;
+  async function start() {
+    if (!course || points.length < 3 || starting) return;
+    starting = true;
+    const loading = showLoading();
+    api.pauseRender?.(true);
+    try {
+      await loading.step(.04, 'מכין כרטיס פרויקט…');
+      api.enter({ exaggeration: relief, quality, isDay: timeOption === 'day' });
+      await loading.step(.12, 'מתבכיין לרכז…');
+      disposeWorld();
+      world = buildWorld();
+      hands ||= createHands();
+      await loading.step(.32, 'פורש את המפה על מכסה המנוע…');
+      buildCompass();
+      syncSoundButton();
+      resetRun();
+      configureMapUI();
+      renderProgressDots();
+      api.updateCamera();
+      await loading.step(.4, 'מעיר את הגמלים…');
+      await api.preloadEngine?.((done, total) => loading.set(.4 + .4 * done / total));
+      await loading.step(.82, 'חורג מהתקציב…');
+      await api.compileField?.();
+      await loading.step(1, 'מוכן!');
+      await new Promise((resolve) => setTimeout(resolve, 450));
+    } finally {
+      api.pauseRender?.(false);
+      loading.hide();
+      starting = false;
+    }
     hud.hidden = false;
     $('navKeys').classList.remove('faded');
-    configureMapUI();
-    renderProgressDots();
-    api.updateCamera();
     beginCountdown();
   }
 
@@ -2332,6 +2410,8 @@ export function createNavGame(api) {
     if (world) {
       world.sky.position.copy(api.camera().position);
       world.sky.visible = Boolean(run?.night) || !api.hasRealSky?.(); // by day: the photographed sky (engine v2)
+      postUniforms.uPostLinear.value = api.postActive?.() ? 1 : 0;
+      postUniforms.uPostExposure.value = api.exposure?.() ?? 1;
       if (run) updateFlags();
       updateNightObjects();
       updateCamelMeshes(dt);

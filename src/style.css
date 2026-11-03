@@ -1074,3 +1074,15 @@ body.nav-blooper .nav-camel-alert, body.nav-blooper .nav-keys, body.nav-blooper 
   .nav-setup { max-height: none; }
   .nav-setup-actions { bottom: 0; }
 }
+
+/* Loading screen before the field (nav-game.js showLoading). The shimmer is a transform
+   animation, so it keeps moving even while the page is busy compiling. */
+.nav-loading { position: fixed; inset: 0; z-index: 2000; display: grid; place-items: center; background: radial-gradient(circle at 50% 40%, #24493d, #0d221b 75%); color: #f2f6ef; }
+.nav-loading[hidden] { display: none; }
+.nav-loading-card { width: min(86vw, 420px); display: grid; gap: 14px; text-align: center; }
+.nav-loading-title { font-size: 26px; font-weight: 800; letter-spacing: .02em; }
+.nav-loading-bar { position: relative; height: 12px; overflow: hidden; border-radius: 999px; background: rgb(255 255 255 / 14%); direction: ltr; }
+.nav-loading-bar i { position: absolute; inset: 0 auto 0 0; width: 0; border-radius: inherit; background: linear-gradient(90deg, #f0a25a, #f26a21); transition: width .35s ease; }
+.nav-loading-bar::after { content: ''; position: absolute; inset: 0; width: 40%; background: linear-gradient(90deg, transparent, rgb(255 255 255 / 35%), transparent); animation: nav-loading-shine 1.2s linear infinite; }
+@keyframes nav-loading-shine { from { transform: translateX(-100%); } to { transform: translateX(260%); } }
+.nav-loading-text { min-height: 1.5em; font-size: 17px; color: #d8e6dc; }
