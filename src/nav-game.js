@@ -269,6 +269,7 @@ export function createNavGame(api) {
     syncCustomControls();
     updateBest();
     updateMoonPreview();
+    api.preloadEngine?.();
     setupDialog.showModal();
     requestAnimationFrame(() => drawMapInto(canvas, { done: 0, nextIndex: 1, showYou: false }));
   }
@@ -1528,7 +1529,7 @@ export function createNavGame(api) {
 
   function start() {
     if (!course || points.length < 3) return;
-    api.enter({ exaggeration: relief });
+    api.enter({ exaggeration: relief, quality, isDay: timeOption === 'day' });
     disposeWorld();
     world = buildWorld();
     hands ||= createHands();
@@ -2330,6 +2331,7 @@ export function createNavGame(api) {
     api.updateCamera();
     if (world) {
       world.sky.position.copy(api.camera().position);
+      world.sky.visible = Boolean(run?.night) || !api.hasRealSky?.(); // by day: the photographed sky (engine v2)
       if (run) updateFlags();
       updateNightObjects();
       updateCamelMeshes(dt);
