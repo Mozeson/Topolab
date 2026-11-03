@@ -32,7 +32,8 @@ export const NAV_LEVELS = {
 const LEVEL_NAMES = { easy: 'קל', normal: 'רגיל', hard: 'מאתגר', memory: 'מהזיכרון', custom: 'מותאם אישית' };
 export const PEEK_PENALTY = 15; // seconds added per map peek
 const TURN_SPEED = 110;         // degrees per second
-const RUN_FACTOR = 1.8;
+const RUN_FACTOR = 1.8;      // drone turbo
+const FOOT_RUN_FACTOR = 2.4; // running on foot (Shift): a real sprint relative to the chosen pace
 const BACK_FACTOR = .55;
 const BEST_KEY = 'topolab-nav-best';
 const SOUND_KEY = 'topolab-nav-sound';
@@ -2423,7 +2424,7 @@ export function createNavGame(api) {
           run.pace = slopeSpeedFactor(run.grade) * (run.ground?.speed ?? 1);
           // Into the wind is slower, with it a little faster; a spent runner slows down.
           const windFactor = run.windState ? windSpeedFactor(run.windState, o.heading + (dir < 0 ? 180 : 0)) : 1;
-          const speed = walkSpeed() * (running ? RUN_FACTOR * runFactor(run.fatigue) : 1) * (dir < 0 ? BACK_FACTOR : 1) * input * run.pace * windFactor;
+          const speed = walkSpeed() * (running ? FOOT_RUN_FACTOR * runFactor(run.fatigue) : 1) * (dir < 0 ? BACK_FACTOR : 1) * input * run.pace * windFactor;
           const nu = clamp(o.u + dx * speed * dt / extent, .002, .998);
           const nv = clamp(o.v + dy * speed * dt / extent, .002, .998);
           const step = distanceMeters(o, { u: nu, v: nv }, extent);
