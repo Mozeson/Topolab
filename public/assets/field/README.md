@@ -10,3 +10,4 @@ All CC0 (public domain) from [Poly Haven](https://polyhaven.com), resized/recomp
 | `sky_1k.hdr` (lighting), `sky_4k.jpg` (visible sky, tonemapped) | https://polyhaven.com/a/kloofendal_48d_partly_cloudy_puresky |
 | `forest_leaves_03_*` (512 px) | https://polyhaven.com/a/forest_leaves_03 |
 | `jolcham_oak_bark_01_*` (512 px) | https://polyhaven.com/a/jolcham_oak_bark_01 |
+| `sunset_4k.jpg` (dusk backdrop) | https://polyhaven.com/a/belfast_sunset_puresky |

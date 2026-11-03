@@ -40,6 +40,7 @@ export function createFieldEngine({ renderer, scene, camera, terrainUniforms, me
   const loader = new THREE.TextureLoader();
   let loading = null;
   let skyTexture = null;
+  let sunsetTexture = null;
   let envMap = null;
   const sunDir = new THREE.Vector3(-10, 13, -9).normalize();
   let sunKnown = false;
@@ -83,7 +84,7 @@ export function createFieldEngine({ renderer, scene, camera, terrainUniforms, me
   // Progress listeners (the loading screen): called with (done, total) as files arrive.
   const listeners = new Set();
   let done = 0;
-  const TOTAL = LAYERS.length * 2 + 5;
+  const TOTAL = LAYERS.length * 2 + 6;
   const tick = (value) => { done++; listeners.forEach((fn) => fn(done, TOTAL)); return value; };
 
   function load(onProgress) {
@@ -111,6 +112,8 @@ export function createFieldEngine({ renderer, scene, camera, terrainUniforms, me
         surfaceTextures.ready.value = 1;
       }
       skyTexture = tick(await texture('sky_4k.jpg', true));
+      sunsetTexture = tick(await texture('sunset_4k.jpg', true));
+      if (sunsetTexture) sunsetTexture.mapping = THREE.EquirectangularReflectionMapping;
       if (skyTexture) skyTexture.mapping = THREE.EquirectangularReflectionMapping;
       const hdr = tick(await new Promise((resolve) => new HDRLoader().load(BASE + 'sky_1k.hdr', resolve, undefined, () => resolve(null))));
       if (hdr) {
@@ -164,6 +167,7 @@ export function createFieldEngine({ renderer, scene, camera, terrainUniforms, me
     get usesPost() { return active && full && Boolean(composer); },
     get realSky() { return active && day && Boolean(skyTexture); },
     get sunDirection() { return sunKnown ? sunDir : null; },
+    get sunsetTexture() { return active ? sunsetTexture : null; },
     preload: load,
     // quality 'full' adds post-processing; 'light' keeps the materials and the sky only.
     enter({ isDay = true, quality = 'full' } = {}) {
@@ -187,6 +191,7 @@ export function createFieldEngine({ renderer, scene, camera, terrainUniforms, me
       active = false;
       scene.environment = null;
       scene.backgroundIntensity = 1;
+      scene.backgroundRotation.set(0, 0, 0);
     },
     setSize(width, height) {
       if (!composer) return;

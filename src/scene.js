@@ -2212,6 +2212,55 @@ function updateGameShadow() {
   cam.updateProjectionMatrix();
 }
 
+// Dusk (engine v2): the sunset photo behind the game's sky while the sun is up, rotated so
+// its sun sits where sky.js puts ours, then faded into the twilight dome as the sun sets.
+const SUNSET_SUN = { u: .636, v: .4615 }; // where the sun is in sunset_4k.jpg (u east-wrap, v from the top)
+let backdropMix = 0;
+function updateDuskBackdrop(sky) {
+  const texture = fieldEngine?.sunsetTexture;
+  backdropMix = texture && sky ? THREE.MathUtils.smoothstep(sky.sunAlt, -3, 2) : 0;
+  if (!texture || !sky) return;
+  if (backdropMix > .001) {
+    scene.background = texture;
+    scene.backgroundIntensity = 1.1;
+    const photo = (SUNSET_SUN.u - .5) * Math.PI * 2;
+    const ours = Math.atan2(sky.sun.z, sky.sun.x);
+    scene.backgroundRotation.set(0, photo - ours, 0);
+  } else if (!scene.background?.isColor) {
+    scene.background = new THREE.Color();
+    scene.backgroundRotation.set(0, 0, 0);
+  }
+}
+
+// A picture of a tree from the side (for far-away impostors): returns its texture and size.
+function bakeImpostor(geometry, material) {
+  if (!renderer) return null;
+  geometry.computeBoundingBox();
+  const box = geometry.boundingBox;
+  const width = Math.max(box.max.x - box.min.x, box.max.z - box.min.z);
+  const height = box.max.y - box.min.y;
+  const target = new THREE.WebGLRenderTarget(256, 512, { samples: 4 });
+  target.texture.generateMipmaps = true;
+  target.texture.minFilter = THREE.LinearMipmapLinearFilter;
+  const bake = new THREE.Scene();
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.position.x = -(box.max.x + box.min.x) / 2;
+  bake.add(mesh, new THREE.HemisphereLight(0xffffff, 0x777777, 1.6));
+  const light = new THREE.DirectionalLight(0xffffff, 1.4);
+  light.position.set(.3, 1, 1);
+  bake.add(light);
+  const shot = new THREE.OrthographicCamera(-width / 2, width / 2, box.max.y, box.min.y, -50, 50);
+  shot.position.set(0, 0, 10);
+  const previous = { target: renderer.getRenderTarget(), color: renderer.getClearColor(new THREE.Color()), alpha: renderer.getClearAlpha() };
+  renderer.setRenderTarget(target);
+  renderer.setClearColor(0x000000, 0);
+  renderer.clear();
+  renderer.render(bake, shot);
+  renderer.setRenderTarget(previous.target);
+  renderer.setClearColor(previous.color, previous.alpha);
+  return { texture: target.texture, width, height, centerX: 0, bottom: box.min.y };
+}
+
 // The field's haze: farther while flying; at night darker and closer (gameFog).
 function applyGameFog() {
   if (!scene?.fog || !state.navigating) return;
@@ -2222,6 +2271,7 @@ function applyGameFog() {
   if (gameFog) scene.fog.color.setRGB(...gameFog.color, THREE.SRGBColorSpace);
   else scene.fog.color.set(fieldEngine?.realSky ? 0xc6d3df : 0xdfe9e2); // haze matching the photographed horizon
   if (scene.background?.isColor) scene.background.copy(scene.fog.color);
+  else if (!gameFog && !fieldEngine?.realSky) scene.background = scene.fog.color.clone();
 }
 
 // Lights for a sky state from sky.js (the key light follows the sun or the moon), or the
@@ -2262,6 +2312,7 @@ function setGameLighting(sky) {
     if (fillLight) fillLight.intensity = sky.fill;
     renderer.toneMappingExposure = sky.exposure;
     if (contourUniforms) contourUniforms.uTexGain.value = 1.9;
+    updateDuskBackdrop(sky);
     gameFog = sky.fog;
   }
   applyGameFog();
@@ -3173,6 +3224,8 @@ navGame = createNavGame({
   },
   hasRealSky: () => Boolean(fieldEngine?.realSky),
   postActive: () => Boolean(fieldEngine?.usesPost),
+  backdropMix: () => backdropMix,
+  bakeImpostor,
   exposure: () => renderer?.toneMappingExposure ?? 1,
   // First-person hands etc.: a callback drawn after the field each frame (or null).
   setOverlay: (fn) => { overlayRender = fn; needsRender = true; },

@@ -596,6 +596,7 @@ export function createNavGame(api) {
       new THREE.ShaderMaterial({
         side: THREE.BackSide,
         depthWrite: false,
+        transparent: true,
         fog: false,
         uniforms: {
           top: { value: new THREE.Color(0x4f8fc9) },
@@ -610,11 +611,13 @@ export function createNavGame(api) {
           moonCos: { value: Math.cos(1.1 * Math.PI / 180) },
           moonSin: { value: Math.sin(1.1 * Math.PI / 180) },
           ...postUniforms,
+          uBackdrop: { value: 0 }, // 1: the sunset photo behind shows through (engine v2, dusk)
         },
         vertexShader: 'varying vec3 vDir; void main(){ vDir = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
         fragmentShader: `uniform vec3 top; uniform vec3 horizon; uniform vec3 bottom; uniform vec3 glow; uniform vec3 sun; uniform float sunDisc;
           uniform vec3 moon; uniform float moonDisc; uniform float moonHalo; uniform float moonCos; uniform float moonSin;
           varying vec3 vDir;
+          uniform float uBackdrop;
           ${POST_INVERSE_GLSL}
           void main(){
             vec3 d = normalize(vDir);
@@ -638,7 +641,7 @@ export function createNavGame(api) {
               vec3 surface = mix(vec3(.04, .05, .08), vec3(.98, .96, .88) * (.8 + .2 * sqrt(1.0 - r2)) * (1.0 - sea), lit);
               c += surface * moonDisc * (1.0 - smoothstep(.9, 1.0, sqrt(r2)));
             }
-            gl_FragColor = vec4(postLinear(c), 1.0);
+            gl_FragColor = vec4(postLinear(c), 1.0 - uBackdrop);
           }`,
       }),
     );
@@ -654,7 +657,8 @@ export function createNavGame(api) {
     const reach = reachRadiusMeters(extent);
     const area = (extent / 1000) ** 2;
     const lite = quality === 'light'; // phones: lighter scenery
-    const treeCount = Math.min(lite ? 600 : 1200, Math.round(70 * area));
+    // Far chunks become impostors (bakeImpostors), so the hills can carry many more trees.
+    const treeCount = Math.min(lite ? 900 : 2800, Math.round(160 * area));
     const vegetation = (geometry, height, amount, key) => {
       const material = addSurface(addWindSway(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .95 }), { height, amount, key }), 'plant');
       return { geometry, material };
@@ -701,16 +705,20 @@ export function createNavGame(api) {
         mesh.computeBoundingSphere();
         mesh.castShadow = true;
         mesh.receiveShadow = true;
-        mesh.userData.detail = { high, low };
+        mesh.userData.detail = { high, low, material, kind: high.userData.kind || null };
         chunks.push(mesh);
         group.add(mesh);
       }
     };
     const gentle = (u, v) => 1 - Math.min(1, realSlope(u, v) / .45);
-    place({ count: Math.round(treeCount * .45), high: pineGeometry(1), low: pineGeometry(0), material: pineMaterial, accept: gentle,
+    const pineHigh = pineGeometry(1);
+    pineHigh.userData.kind = 'pine';
+    const oakHigh = oakGeometry(1);
+    oakHigh.userData.kind = 'oak';
+    place({ count: Math.round(treeCount * .45), high: pineHigh, low: pineGeometry(0), material: pineMaterial, accept: gentle,
       size: () => { const r = .75 + rand() * .5; return { x: r, y: r * (.9 + rand() * .3) }; },
       tint: () => colour.setHSL(.22 + rand() * .06, .15 + rand() * .15, .78 + rand() * .17), sink: .02, tilt: .08 });
-    place({ count: Math.round(treeCount * .55), high: oakGeometry(1), low: oakGeometry(0), material: oakMaterial, accept: gentle,
+    place({ count: Math.round(treeCount * .55), high: oakHigh, low: oakGeometry(0), material: oakMaterial, accept: gentle,
       size: () => { const r = .7 + rand() * .6; return { x: r, y: r * (.85 + rand() * .3) }; },
       tint: () => colour.setHSL(.2 + rand() * .06, .15 + rand() * .15, .78 + rand() * .17), sink: .02 });
     place({ count: Math.min(lite ? 900 : 1800, Math.round(120 * area)), high: rockGeometry(3.7, 1), low: rockGeometry(3.7, 0), material: rockMaterial,
@@ -900,6 +908,7 @@ export function createNavGame(api) {
       materials.forEach((m) => m.dispose());
     });
     world.textures.forEach((t) => t.dispose());
+    for (const imp of Object.values(world.impostors || {})) { imp.geometry.dispose(); imp.material.dispose(); imp.texture.dispose(); }
     for (const mesh of world.chunks || []) { mesh.userData.detail.high.dispose(); mesh.userData.detail.low.dispose(); }
     world = null;
   }
@@ -1384,14 +1393,52 @@ export function createNavGame(api) {
   }
 
   // Far chunks of trees and rocks switch to their low-detail model.
+  // Detail by distance: full model near, simple model beyond 550 m, and for trees a baked
+  // picture facing the camera (an impostor) beyond 900 m.
   function updateChunkDetail() {
     const camera = api.camera();
-    const far = api.metersToWorld() * 550;
+    const mtw = api.metersToWorld();
     for (const mesh of world.chunks || []) {
+      const detail = mesh.userData.detail;
       const sphere = mesh.boundingSphere;
       const d = sphere ? sphere.center.distanceTo(camera.position) - sphere.radius : 0;
-      const geometry = d > far ? mesh.userData.detail.low : mesh.userData.detail.high;
+      const impostor = detail.kind && world.impostors?.[detail.kind];
+      let geometry = d > mtw * 550 ? detail.low : detail.high;
+      let material = detail.material;
+      if (impostor && d > mtw * 900) { geometry = impostor.geometry; material = impostor.material; }
       if (mesh.geometry !== geometry) mesh.geometry = geometry;
+      if (mesh.material !== material) { mesh.material = material; mesh.castShadow = material === detail.material; }
+    }
+  }
+
+  // Bake a side view of each tree kind into a texture (after the photographed leaves have
+  // loaded) and make a camera-facing quad material for far chunks.
+  function bakeImpostors() {
+    if (!world?.chunks || world.impostors || !api.bakeImpostor) return;
+    world.impostors = {};
+    for (const kind of ['pine', 'oak']) {
+      const mesh = world.chunks.find((m) => m.userData.detail.kind === kind);
+      if (!mesh) continue;
+      const baked = api.bakeImpostor(mesh.userData.detail.high, mesh.userData.detail.material);
+      if (!baked) continue;
+      const quad = new THREE.PlaneGeometry(baked.width, baked.height).translate(baked.centerX, baked.bottom + baked.height / 2, 0);
+      const material = new THREE.MeshStandardMaterial({ map: baked.texture, alphaTest: .45, roughness: 1, side: THREE.DoubleSide });
+      material.onBeforeCompile = (shader) => {
+        shader.vertexShader = shader.vertexShader.replace('#include <project_vertex>', `
+          vec3 impRoot = (modelMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+          float impScaleX = length(instanceMatrix[0].xyz);
+          float impScaleY = length(instanceMatrix[1].xyz);
+          vec3 impToCam = cameraPosition - impRoot;
+          vec3 impRight = normalize(vec3(impToCam.z, 0.0, -impToCam.x) + vec3(1e-6, 0.0, 0.0));
+          vec3 impWorld = impRoot + impRight * transformed.x * impScaleX + vec3(0.0, 1.0, 0.0) * transformed.y * impScaleY;
+          vec4 mvPosition = viewMatrix * vec4(impWorld, 1.0);
+          gl_Position = projectionMatrix * mvPosition;`);
+        // Lit like a crown: mostly from above, a little towards the viewer.
+        shader.fragmentShader = shader.fragmentShader.replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+          normal = normalize((viewMatrix * vec4(0.0, 1.0, 0.0, 0.0)).xyz * .7 + vec3(0.0, 0.0, .5));`);
+      };
+      material.customProgramCacheKey = () => 'tree-impostor';
+      world.impostors[kind] = { geometry: quad, material, texture: baked.texture };
     }
   }
 
@@ -1618,6 +1665,7 @@ export function createNavGame(api) {
       await loading.step(.4, 'מעיר את הגמלים…');
       await api.preloadEngine?.((done, total) => loading.set(.4 + .4 * done / total));
       await loading.step(.82, 'חורג מהתקציב…');
+      bakeImpostors();
       await api.compileField?.();
       await loading.step(1, 'מוכן!');
       await new Promise((resolve) => setTimeout(resolve, 450));
@@ -2421,6 +2469,7 @@ export function createNavGame(api) {
       world.sky.position.copy(api.camera().position);
       world.sky.visible = Boolean(run?.night) || !api.hasRealSky?.(); // by day: the photographed sky (engine v2)
       postUniforms.uPostLinear.value = api.postActive?.() ? 1 : 0;
+      world.sky.material.uniforms.uBackdrop.value = run?.night ? api.backdropMix?.() ?? 0 : 0;
       postUniforms.uPostExposure.value = api.exposure?.() ?? 1;
       if (run) updateFlags();
       updateNightObjects();
