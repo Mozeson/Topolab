@@ -736,6 +736,7 @@ try { Object.assign(view3d, JSON.parse(localStorage.getItem(VIEW3D_KEY) || '{}')
 let shadowCatcher = null;
 let fillLight = null;
 let hemiLight = null;
+let overlayRender = null; // nav-game.js: the walker's hands, drawn over the field (own near plane)
 // Night navigation (nav-game.js + sky.js) recolours the fog; the drone only moves it out.
 let gameFog = null; // { color: [r, g, b] sRGB, scale } or null for the daytime haze
 let skirtUniforms = null;
@@ -843,12 +844,13 @@ function installContourShader(material) {
     uGridCell: { value: 1.25 },     // grid square size in world units
     uHalfWorld: { value: 5 },
     uWorldToMeters: { value: 400 },
+    uExaggeration: { value: 1 },   // the field's vertical exaggeration: ground types follow the real slope
   };
   material.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, contourUniforms);
     shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', '#include <common>\nattribute float aHeight;\nvarying float vTerrainHeight;\nvarying vec2 vGroundXZ;')
-      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvTerrainHeight = aHeight;\nvGroundXZ = position.xz;');
+      .replace('#include <common>', '#include <common>\nattribute float aHeight;\nvarying float vTerrainHeight;\nvarying vec2 vGroundXZ;\nvarying vec3 vGroundNormal;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvTerrainHeight = aHeight;\nvGroundXZ = position.xz;\nvGroundNormal = normalize(objectNormal);');
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', `#include <common>
         varying float vTerrainHeight;
@@ -860,19 +862,52 @@ function installContourShader(material) {
         uniform float uGrid;
         uniform float uGridCell;
         uniform float uHalfWorld;
+        uniform float uExaggeration;
+        varying vec3 vGroundNormal;
         float groundHash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
         float groundNoise(vec2 p) {
           vec2 i = floor(p); vec2 f = fract(p); f = f * f * (3.0 - 2.0 * f);
           return mix(mix(groundHash(i), groundHash(i + vec2(1.0, 0.0)), f.x), mix(groundHash(i + vec2(0.0, 1.0)), groundHash(i + vec2(1.0, 1.0)), f.x), f.y);
         }
+        float groundFbm(vec2 p) { return groundNoise(p) * .5 + groundNoise(p * 2.03 + 5.1) * .25 + groundNoise(p * 4.11 + 1.7) * .15 + groundNoise(p * 8.3 + 9.2) * .1; }
+        // Surface relief from a height field (view-space derivatives), like a bump map.
+        vec3 groundBump(vec3 pos, vec3 n, float h) {
+          vec3 dpx = dFdx(pos); vec3 dpy = dFdy(pos);
+          float dhx = dFdx(h); float dhy = dFdy(h);
+          vec3 r1 = cross(dpy, n); vec3 r2 = cross(n, dpx);
+          float det = dot(dpx, r1);
+          vec3 grad = sign(det) * (dhx * r1 + dhy * r2);
+          return normalize(abs(det) * n - grad);
+        }
       `)
       .replace('#include <color_fragment>', `#include <color_fragment>
+        float groundRelief = 0.0;
         if (uDetail > 0.5) {
+          // The field: dry Mediterranean grass, patches of terra rossa, and limestone where
+          // the real (not exaggerated) slope is steep, with horizontal bedding.
           vec2 m = vGroundXZ * uWorldToMeters;
-          float n = groundNoise(m / 30.0) * .6 + groundNoise(m / 9.0) * .3 + groundNoise(m / 3.5) * .1;
-          float patches = smoothstep(.35, .75, groundNoise(m / 90.0 + 7.3));
-          diffuseColor.rgb *= .82 + n * .34;
-          diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(1.08, 1.02, .82), patches * .35);
+          float fine = 1.0 - smoothstep(.6, 2.5, length(fwidth(m))); // fade detail far away
+          float ny = clamp(vGroundNormal.y, .05, 1.0);
+          float slope = sqrt(1.0 - ny * ny) / ny / max(uExaggeration, 1.0);
+          // Seven noise lookups in all, reused across the layers (phones and slow GPUs).
+          float large = groundNoise(m / 60.0) * .65 + groundNoise(m / 23.0 + 5.1) * .35;
+          float mid = groundNoise(m / 11.0) * .65 + groundNoise(m / 4.3 + 1.7) * .35;
+          float small = groundNoise(m / 1.7) * fine;
+          float other = groundNoise(m / 30.0 + 11.7);
+          float rock = smoothstep(.2, .42, slope + (mid - .5) * .22) + smoothstep(.7, .84, other * .6 + large * .4) * .7;
+          rock = clamp(rock, 0.0, 1.0);
+          float soil = smoothstep(.58, .8, other * .55 + (1.0 - large) * .45) * (1.0 - rock);
+          vec3 green = vec3(.33, .40, .19);
+          vec3 straw = vec3(.62, .58, .36);
+          vec3 grass = mix(green, straw, smoothstep(.25, .8, large + (mid - .5) * .4));
+          grass *= .8 + .4 * mix(.5, small, .8);
+          vec3 earth = mix(vec3(.50, .33, .22), vec3(.58, .44, .30), mid) * (.88 + .24 * small);
+          float bed = fract(vTerrainHeight / 2.6 + mid * .4);
+          vec3 stone = mix(vec3(.62, .60, .55), vec3(.78, .75, .68), mid) * mix(.72, 1.0, smoothstep(0.0, .18, bed));
+          stone *= .9 + .2 * small;
+          vec3 ground = mix(mix(grass, earth, soil), stone, rock);
+          diffuseColor.rgb = mix(ground, diffuseColor.rgb * ground * 2.4, .22);
+          groundRelief = (rock * (small * .9 + mid * .5 + (1.0 - smoothstep(0.0, .18, bed)) * .6) + (1.0 - rock) * small * .25) / uWorldToMeters;
         }
         if (uGrid > 0.5) {
           vec2 g = (vGroundXZ + uHalfWorld) / uGridCell;
@@ -895,9 +930,12 @@ function installContourShader(material) {
           diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.24, 0.22, 0.15), line * 0.62 * hasSlope);
           diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.16, 0.17, 0.12), majorLine * 0.78 * hasSlope);
         }
+      `)
+      .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+        if (uDetail > 0.5) normal = groundBump(-vViewPosition, normal, groundRelief);
       `);
   };
-  material.customProgramCacheKey = () => 'terrain-contour-v4';
+  material.customProgramCacheKey = () => 'terrain-contour-v5';
 }
 
 function initThree() {
@@ -1011,6 +1049,7 @@ function initThree() {
       if (moved || needsRender) updateCompass();
       if (moved || needsRender) {
         renderer.render(scene, camera);
+        overlayRender?.(renderer, camera);
         needsRender = false;
       }
     });
@@ -1034,7 +1073,10 @@ function resizeThree() {
   camera.fov = state.observer.firstPerson ? (state.observer.drone ? state.observer.fov || 74 : OBSERVER_FOV) : camera.aspect < 0.85 ? 52 : 43;
   camera.near = state.observer.firstPerson ? metersToWorld() * .3 : .1;
   camera.updateProjectionMatrix();
-  if (scene) renderer.render(scene, camera);
+  if (scene) {
+    renderer.render(scene, camera);
+    overlayRender?.(renderer, camera);
+  }
   needsRender = false;
 }
 
@@ -1172,6 +1214,7 @@ function updateTerrain() {
     contourUniforms.uHalfWorld.value = WORLD_SIZE / 2;
     contourUniforms.uInterval.value = state.interval;
     contourUniforms.uDetail.value = state.navigating ? 1 : 0;
+    contourUniforms.uExaggeration.value = state.exaggeration;
     contourUniforms.uWorldToMeters.value = 1 / metersToWorld();
   }
   if (state.observer.firstPerson) updateObserverCamera();
@@ -1245,6 +1288,7 @@ function updateObserverCamera() {
     camera.position.z - Math.cos(heading) * horizontal,
   );
   camera.lookAt(target);
+  updateGameShadow();
   if (flying) {
     // FPV: bank (roll) around the view axis, a lens that widens with speed, and shake.
     if (observer.roll) camera.rotateZ(-observer.roll * Math.PI / 180);
@@ -2056,11 +2100,57 @@ function enterGameMode({ exaggeration = 1 } = {}) {
     scene.background = new THREE.Color(0xdfe9e2);
   }
   if (groundMesh) groundMesh.visible = true;
+  setGameShadow(true);
   applyView3d();
   updateObserverUI();
   updateTerrain();
   updateBrushRing();
   requestAnimationFrame(() => { resizeThree(); updateObserverCamera(); });
+}
+
+// In the field the sun's shadow map covers only the walker's surroundings (~1.2 km), so
+// trees, rocks and camels get crisp shadows; it follows the camera, snapped to texels.
+let gameShadow = null; // { half, dir } while navigating
+const shadowCentre = new THREE.Vector3();
+const keyLightDir = new THREE.Vector3(-10, 13, -9).normalize(); // towards the sun (or the moon)
+function setGameShadow(on) {
+  if (!sunLight) return;
+  if (on) {
+    if (!sunLight.target.parent) scene.add(sunLight.target);
+    gameShadow = { half: metersToWorld() * Math.min(700, mapExtentMeters() * .18) };
+    const cam = sunLight.shadow.camera;
+    cam.left = -gameShadow.half; cam.right = gameShadow.half; cam.top = gameShadow.half; cam.bottom = -gameShadow.half;
+    sunLight.shadow.bias = -0.0006;
+    sunLight.shadow.normalBias = metersToWorld() * 3;
+    cam.updateProjectionMatrix();
+  } else if (gameShadow) {
+    gameShadow = null;
+    sunLight.target.position.set(0, 0, 0);
+    sunLight.target.updateMatrixWorld();
+    sunLight.position.set(-10, 13, -9).multiplyScalar(state.mapSize / 4);
+    sunLight.shadow.bias = -0.00035;
+    sunLight.shadow.normalBias = 0.035;
+    const sizeFactor = state.mapSize / 4;
+    const cam = sunLight.shadow.camera;
+    const extent = 10 * sizeFactor;
+    cam.left = -extent; cam.right = extent; cam.top = extent; cam.bottom = -extent;
+    cam.near = 1;
+    cam.far = 42 * sizeFactor;
+    cam.updateProjectionMatrix();
+  }
+}
+function updateGameShadow() {
+  if (!gameShadow || !camera) return;
+  const dir = keyLightDir;
+  const texel = gameShadow.half * 2 / sunLight.shadow.mapSize.x;
+  shadowCentre.set(Math.round(camera.position.x / texel) * texel, camera.position.y, Math.round(camera.position.z / texel) * texel);
+  sunLight.target.position.copy(shadowCentre);
+  sunLight.position.copy(shadowCentre).addScaledVector(dir, WORLD_SIZE * 2);
+  sunLight.target.updateMatrixWorld();
+  const cam = sunLight.shadow.camera;
+  cam.near = .01;
+  cam.far = WORLD_SIZE * 4;
+  cam.updateProjectionMatrix();
 }
 
 // The field's haze: farther while flying; at night darker and closer (gameFog).
@@ -2084,7 +2174,8 @@ function setGameLighting(sky) {
     gameFog = null;
     sunLight.color.set(0xfff1d6);
     sunLight.intensity = 2.6;
-    sunLight.position.set(-10 * sizeFactor, 13 * sizeFactor, -9 * sizeFactor);
+    keyLightDir.set(-10, 13, -9).normalize();
+    sunLight.position.copy(sunLight.target.position).addScaledVector(keyLightDir, 18.7 * sizeFactor);
     hemiLight?.color.set(0xf2f5ff);
     hemiLight?.groundColor.set(0x5a6650);
     if (hemiLight) hemiLight.intensity = 1.15;
@@ -2097,7 +2188,8 @@ function setGameLighting(sky) {
     // Keep the light just above the horizon so shadows stay sane as the body sets.
     const y = Math.max(dir.y, .03);
     const length = Math.hypot(dir.x, y, dir.z);
-    sunLight.position.set(dir.x / length, y / length, dir.z / length).multiplyScalar(18 * sizeFactor);
+    keyLightDir.set(dir.x / length, y / length, dir.z / length);
+    sunLight.position.copy(sunLight.target.position).addScaledVector(keyLightDir, 18 * sizeFactor);
     if (hemiLight) {
       hemiLight.color.setRGB(...sky.hemi.sky, THREE.SRGBColorSpace);
       hemiLight.groundColor.setRGB(...sky.hemi.ground, THREE.SRGBColorSpace);
@@ -2114,6 +2206,8 @@ function setGameLighting(sky) {
 function exitGameMode() {
   if (!state.navigating) return;
   setGameLighting(null);
+  setGameShadow(false);
+  overlayRender = null;
   state.navigating = false;
   document.body.classList.remove('navigating');
   document.querySelector('#zoomJoystick .joystick-tag').textContent = 'קירוב';
@@ -2998,6 +3092,8 @@ navGame = createNavGame({
   },
   // Dusk / night (sky.js skyState) or null to restore daylight.
   setLighting: setGameLighting,
+  // First-person hands etc.: a callback drawn after the field each frame (or null).
+  setOverlay: (fn) => { overlayRender = fn; needsRender = true; },
   invalidate: () => { needsRender = true; },
   renderMapBase: (ctx, w, h, dpr) => drawPrintBlock(ctx, w, h, dpr, { mapStyle: 'hypsometric', tintOpacity: .4, showGrid: false, showCoordinates: false, showFeatures: true }),
   enter: enterGameMode,

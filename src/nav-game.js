@@ -9,7 +9,13 @@ import {
 } from './course.js';
 import { readCoordinate, formatCoordinate } from './grid-coords.js';
 import { DRONE, FPV, stepAltitude, stepLanding, stepBattery, canReadNote, feedCheat, fpvTopSpeed, fpvVelocity, fpvGround, terrainAhead } from './drone.js';
-import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import {
+  windUniforms, addWindSway, pineGeometry, oakGeometry, shrubGeometry, rockGeometry, grassTuftGeometry,
+  createCamel, poseCamel, createHands, createDust,
+} from './field-models.js';
+import { createFieldAudio } from './field-audio.js';
+import { createWind, windAt, windSpeedFactor, describeWind } from './wind.js';
+import { effortLoad, stepFatigue, breathing, runFactor } from './effort.js';
 import { CAMEL, valleyScore, sampleGrid, spawnCamels, stepCamel, separateCamels, metersBetween, detectRadius } from './camels.js';
 import {
   skyState, skyBasis, starVector, BRIGHT_STARS, moonPhase, moonTimes, moonDirection, hebrewDay, formatHour, altitude, azimuth, directionName,
@@ -168,6 +174,12 @@ export function createNavGame(api) {
   });
   $('navMoonDay').addEventListener('input', () => { moonDay = Number($('navMoonDay').value); writeStorage(MOON_KEY, moonDay); updateMoonPreview(); });
   $('navStartHour').addEventListener('change', () => { startHour = Number($('navStartHour').value); writeStorage(HOUR_KEY, startHour); updateMoonPreview(); });
+  let quality = readStorage('topolab-nav-quality', matchMedia('(pointer: coarse)').matches ? 'light' : 'full');
+  if (!['full', 'light'].includes(quality)) quality = 'full';
+  document.querySelectorAll('input[name="navQuality"]').forEach((input) => {
+    input.checked = input.value === quality;
+    input.addEventListener('change', () => { quality = input.value; writeStorage('topolab-nav-quality', quality); });
+  });
   const startClockFor = () => (timeOption === 'dusk' ? DUSK_START : timeOption === 'night' ? startHour : 12);
 
   // The moon in the briefing: its phase, and where it will be when you set out.
@@ -566,43 +578,96 @@ export function createNavGame(api) {
     sky.scale.setScalar(120);
     group.add(sky);
 
-    // Shrubs and a few trees: give a sense of scale and motion. Kept clear of the controls.
+    // Vegetation and rocks (field-models.js): cushion shrubs, Aleppo pines and oaks that sway
+    // in the wind, and limestone boulders, more of them where the real slope is steep. Kept
+    // clear of the controls. Sizes are real; every piece is instanced.
     const rand = random(0x5eed + api.mapSize());
     const reach = reachRadiusMeters(extent);
-    const shrubCount = Math.min(3600, Math.round(520 * (extent / 1000) ** 2));
-    const shrubs = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 0), new THREE.MeshStandardMaterial({ flatShading: true, roughness: 1 }), shrubCount);
-    const trees = new THREE.InstancedMesh(new THREE.ConeGeometry(1, 3.2, 7), new THREE.MeshStandardMaterial({ flatShading: true, roughness: .95 }), Math.round(shrubCount / 5));
+    const area = (extent / 1000) ** 2;
+    const lite = quality === 'light'; // phones: lighter scenery
+    const treeCount = Math.min(lite ? 600 : 1200, Math.round(70 * area));
+    const vegetation = (geometry, height, amount, key) => {
+      const material = addWindSway(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .95 }), { height, amount, key });
+      return { geometry, material };
+    };
+    const shrubKind = vegetation(shrubGeometry(), 1, .06, 'shrub');
+    // Trees and rocks: split into chunks so the engine can skip what is out of view (and out of
+    // the shadow area), with a low-detail model for chunks far away (see updateChunkDetail).
+    const pineMaterial = addWindSway(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .95 }), { height: 6, amount: .035, key: 'pine' });
+    const oakMaterial = addWindSway(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .95 }), { height: 4, amount: .03, key: 'oak' });
+    const rockMaterial = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .9 });
+    const shrubs = new THREE.InstancedMesh(shrubKind.geometry, shrubKind.material, lite ? 320 : 640);
     const matrix = new THREE.Matrix4();
     const quaternion = new THREE.Quaternion();
     const colour = new THREE.Color();
-    const place = (mesh, count, sizeFn, colourFn, lift) => {
+    const realSlope = (u, v) => {
+      const e = 6 / extent;
+      return Math.hypot(api.height(Math.min(1, u + e), v) - api.height(Math.max(0, u - e), v), api.height(u, Math.min(1, v + e)) - api.height(u, Math.max(0, v - e))) / 12;
+    };
+    const CHUNKS = 6;
+    const chunks = [];
+    // accept(u, v) → odds to keep a candidate; size() → { x, y } metres; sink: share of height.
+    const place = ({ count, high, low, material, accept, size, tint, sink = 0, tilt = 0 }) => {
+      const buckets = Array.from({ length: CHUNKS * CHUNKS }, () => []);
       let placed = 0;
-      for (let i = 0; i < count * 3 && placed < count; i++) {
+      for (let i = 0; i < count * 4 && placed < count; i++) {
         const u = rand();
         const v = rand();
         if (points.some((p) => distanceMeters(p, { u, v }, extent) < reach * 1.2)) continue;
-        const size = sizeFn();
-        quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), rand() * Math.PI * 2);
+        if (rand() > accept(u, v)) continue;
+        const s = size();
+        quaternion.setFromEuler(new THREE.Euler((rand() - .5) * tilt, rand() * Math.PI * 2, (rand() - .5) * tilt));
         matrix.compose(
-          new THREE.Vector3((u - .5) * W, groundAt(u, v) * vs + size.y * lift * mtw, (v - .5) * W),
+          new THREE.Vector3((u - .5) * W, groundAt(u, v) * vs - sink * s.y * mtw, (v - .5) * W),
           quaternion,
-          new THREE.Vector3(size.x * mtw, size.y * mtw, size.x * mtw),
+          new THREE.Vector3(s.x * mtw, s.y * mtw, s.x * mtw),
         );
-        mesh.setMatrixAt(placed, matrix);
-        mesh.setColorAt(placed, colourFn());
+        buckets[Math.min(CHUNKS - 1, Math.floor(v * CHUNKS)) * CHUNKS + Math.min(CHUNKS - 1, Math.floor(u * CHUNKS))].push({ m: matrix.clone(), c: tint().clone() });
         placed++;
       }
-      mesh.count = placed;
-      mesh.instanceMatrix.needsUpdate = true;
-      if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+      for (const list of buckets) {
+        if (!list.length) continue;
+        const mesh = new THREE.InstancedMesh(high, material, list.length);
+        list.forEach((item, i) => { mesh.setMatrixAt(i, item.m); mesh.setColorAt(i, item.c); });
+        mesh.computeBoundingSphere();
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        mesh.userData.detail = { high, low };
+        chunks.push(mesh);
+        group.add(mesh);
+      }
     };
-    place(shrubs, shrubCount, () => { const r = 1.1 + rand() * 1.7; return { x: r, y: r * .72 }; },
-      () => colour.setHSL(.24 + rand() * .07, .38 + rand() * .2, .2 + rand() * .1), .45);
-    place(trees, trees.count, () => { const r = 1.6 + rand() * 1.4; return { x: r, y: r * 1.25 }; },
-      () => colour.setHSL(.3 + rand() * .05, .35 + rand() * .15, .16 + rand() * .07), 1.45);
+    const gentle = (u, v) => 1 - Math.min(1, realSlope(u, v) / .45);
+    place({ count: Math.round(treeCount * .45), high: pineGeometry(1), low: pineGeometry(0), material: pineMaterial, accept: gentle,
+      size: () => { const r = .75 + rand() * .5; return { x: r, y: r * (.9 + rand() * .3) }; },
+      tint: () => colour.setHSL(.22 + rand() * .06, .15 + rand() * .15, .78 + rand() * .17), sink: .02, tilt: .08 });
+    place({ count: Math.round(treeCount * .55), high: oakGeometry(1), low: oakGeometry(0), material: oakMaterial, accept: gentle,
+      size: () => { const r = .7 + rand() * .6; return { x: r, y: r * (.85 + rand() * .3) }; },
+      tint: () => colour.setHSL(.2 + rand() * .06, .15 + rand() * .15, .78 + rand() * .17), sink: .02 });
+    place({ count: Math.min(lite ? 900 : 1800, Math.round(120 * area)), high: rockGeometry(3.7, 1), low: rockGeometry(3.7, 0), material: rockMaterial,
+      accept: (u, v) => .12 + Math.min(1, realSlope(u, v) / .3) * .88,
+      size: () => { const r = .35 + rand() ** 2.2 * 2.6; return { x: r, y: r * (.7 + rand() * .5) }; },
+      tint: () => colour.setHSL(.1 + rand() * .04, .05 + rand() * .08, .8 + rand() * .18), sink: .25, tilt: .6 });
     shrubs.frustumCulled = false;
-    trees.frustumCulled = false;
-    group.add(shrubs, trees);
+    shrubs.castShadow = true;
+    shrubs.receiveShadow = true;
+    group.add(shrubs);
+
+    // Grass tufts around the walker (re-laid as you move; see updateGrass).
+    const grassCount = lite ? 1400 : 3600;
+    const grass = new THREE.InstancedMesh(grassTuftGeometry(), addWindSway(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1 }), { height: .4, amount: .55, key: 'grass' }), grassCount);
+    grass.frustumCulled = false;
+    grass.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    const grassSpots = Array.from({ length: grassCount }, () => ({ x: rand(), z: rand(), cell: null, size: .7 + rand() * .6, turn: rand() * Math.PI * 2, tone: rand() }));
+    for (let i = 0; i < grassCount; i++) grass.setColorAt(i, colour.setHSL(.13 + grassSpots[i].tone * .07, .3, .55 + grassSpots[i].tone * .25));
+    group.add(grass);
+    shrubs.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    const shrubSpots = Array.from({ length: shrubs.count }, () => ({ x: rand(), z: rand(), cell: null, size: .6 + rand() * 1.1, turn: rand() * Math.PI * 2, tone: rand() }));
+    for (let i = 0; i < shrubs.count; i++) shrubs.setColorAt(i, colour.setHSL(.15 + shrubSpots[i].tone * .1, .12 + rand() * .15, .82 + rand() * .15));
+
+    // Dust kicked up by gusts, running feet and galloping camels.
+    const dust = createDust(lite ? 120 : 260);
+    group.add(dust.points);
 
     // Drone mode: a soft dark disc on the ground under the drone (helps judge height).
     const droneShadow = new THREE.Mesh(
@@ -630,7 +695,15 @@ export function createNavGame(api) {
     const camels = buildCamels(group, CAMEL.counts[camelsOption] || 0);
 
     scene.add(group);
-    return { group, flags, sky, droneShadow, stars, starBasis: new THREE.Matrix4(), lamp, lampTarget, spill, camels, textures: [orange, magenta, ...extras.textures] };
+    return {
+      group, flags, sky, droneShadow, stars, starBasis: new THREE.Matrix4(), lamp, lampTarget, spill, camels,
+      dust, chunks, textures: [orange, magenta, ...extras.textures],
+      // Scattered around the walker on world-anchored tiles (see updateScatter).
+      scatters: [
+        { mesh: grass, spots: grassSpots, tile: 60, maxSlope: .38, avoidPaths: true },
+        { mesh: shrubs, spots: shrubSpots, tile: 320, maxSlope: .55, avoidPaths: true, sink: .05 },
+      ],
+    };
   }
 
   const lampRange = () => Math.max(60, api.extent() * .025); // metres lit ahead
@@ -696,61 +769,22 @@ export function createNavGame(api) {
   // can walk — pacing, both legs on one side together — graze and raise their heads.
   function buildCamels(group, count) {
     if (!count) return [];
-    const sphere = (sx, sy, sz, x, y, z) => new THREE.SphereGeometry(1, 12, 8).scale(sx, sy, sz).translate(x, y, z);
-    const torso = mergeGeometries([
-      sphere(.42, .4, .86, 0, 1.45, 0),
-      sphere(.3, .4, .42, 0, 1.78, .1),
-      sphere(.22, .24, .28, 0, 1.36, -.7),
-      new THREE.CylinderGeometry(.025, .05, .55, 5).rotateX(.35).translate(0, 1.2, .9),
-    ]);
-    const neck = mergeGeometries([
-      new THREE.CylinderGeometry(.09, .15, 1, 7).translate(0, .5, 0).rotateX(-.72),
-      new THREE.BoxGeometry(.2, .21, .5).translate(0, 0, -.2).rotateX(.25).translate(0, .78, -.7),
-      new THREE.ConeGeometry(.04, .13, 4).translate(-.08, .93, -.6),
-      new THREE.ConeGeometry(.04, .13, 4).translate(.08, .93, -.6),
-    ]);
-    const eye = new THREE.SphereGeometry(.06, 6, 4);
-    const leg = new THREE.CylinderGeometry(.075, .05, 1.3, 6).translate(0, -.65, 0);
     const scale = camelScale() * api.metersToWorld();
-    // A soft contact shadow (the sun's shadow map is far too coarse for a camel on a big map).
+    // A soft contact shadow under each camel (for when the sun is low or at night).
     const shadowGeometry = new THREE.CircleGeometry(1, 20).rotateX(-Math.PI / 2);
-    const shadowMaterial = new THREE.MeshBasicMaterial({ color: 0x0b1410, transparent: true, opacity: .32, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4 });
-    const list = [];
+    const shadowMaterial = new THREE.MeshBasicMaterial({ color: 0x0b1410, transparent: true, opacity: .2, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4 });
     // Coats from sandy to dark brown: darker than the grass so a herd stands out.
     const coats = [0x9a6b3c, 0xb07a44, 0x7e5530, 0xa8743f];
+    const list = [];
     for (let i = 0; i < count; i++) {
-      const coat = new THREE.Color(coats[i % coats.length]);
-      const body = new THREE.MeshStandardMaterial({ color: coat, roughness: .95, flatShading: true });
-      const legs = new THREE.MeshStandardMaterial({ color: coat.clone().multiplyScalar(.82), roughness: .95, flatShading: true });
-      const eyeMaterial = new THREE.MeshBasicMaterial({ color: 0xd9ffc8, transparent: true, opacity: 0, toneMapped: false, depthWrite: false, blending: THREE.AdditiveBlending });
-      const root = new THREE.Group();
-      root.add(new THREE.Mesh(torso, body));
-      const neckPivot = new THREE.Group();
-      neckPivot.position.set(0, 1.5, -.7);
-      neckPivot.add(new THREE.Mesh(neck, body));
-      const eyeGroup = new THREE.Group();
-      for (const x of [-.105, .105]) {
-        const ball = new THREE.Mesh(eye, eyeMaterial);
-        ball.position.set(x, .84, -.84);
-        eyeGroup.add(ball);
-      }
-      eyeGroup.visible = false;
-      neckPivot.add(eyeGroup);
-      root.add(neckPivot);
-      const hips = [[-.21, -.52], [.21, -.52], [-.21, .55], [.21, .55]].map(([x, z]) => {
-        const hip = new THREE.Group();
-        hip.position.set(x, 1.3, z);
-        hip.add(new THREE.Mesh(leg, legs));
-        root.add(hip);
-        return hip;
-      });
-      root.scale.setScalar(scale);
-      root.visible = false;
+      const camel = createCamel(coats[i % coats.length]);
+      camel.root.scale.setScalar(scale);
+      camel.root.visible = false;
       const shadow = new THREE.Mesh(shadowGeometry, shadowMaterial);
       shadow.renderOrder = 3;
       shadow.visible = false;
-      group.add(root, shadow);
-      list.push({ root, shadow, neck: neckPivot, legs: hips, eyes: eyeGroup, eyeMaterial, data: null, pose: -1.4 });
+      group.add(camel.root, shadow);
+      list.push({ ...camel, shadow, data: null, pose: -1.35, dustClock: 0 });
     }
     return list;
   }
@@ -791,6 +825,7 @@ export function createNavGame(api) {
       materials.forEach((m) => m.dispose());
     });
     world.textures.forEach((t) => t.dispose());
+    for (const mesh of world.chunks || []) { mesh.userData.detail.high.dispose(); mesh.userData.detail.low.dispose(); }
     world = null;
   }
 
@@ -908,6 +943,9 @@ export function createNavGame(api) {
       // Dusk / night (sky.js): a sky clock that runs as fast as the walking (≥ ×12).
       night: timeOption !== 'day', clock: startClockFor(), startClock: startClockFor(),
       timeScale: clamp(baseSpeed(api.extent()) / 1.4, 12, 30), lamp: false, lampHinted: false, skyTimer: 0, sky: null,
+      // Realism: wind (wind.js), effort (effort.js), steps and breaths.
+      wind: createWind(random((Math.random() * 2 ** 32) >>> 0)), windState: null, clock2: 0,
+      fatigue: 0, breathClock: 2, gruntClock: 0, lastStep: 0, dustClock: 0,
     };
     setDroneUi(false);
     spawnWorldCamels();
@@ -1057,8 +1095,7 @@ export function createNavGame(api) {
       const root = camel.root;
       const moving = clamp(c.speed / (walk * .15), 0, 1);
       const phase = c.gait / (2.2 * scale) * Math.PI * 2;
-      const swing = (c.state === 'chase' ? .62 : .38) * moving;
-      camel.legs.forEach((hip, i) => { hip.rotation.x = Math.sin(phase + (i % 2 ? Math.PI : 0)) * swing; });
+      const swing = (c.state === 'chase' ? .55 : .32) * moving;
       root.position.set((c.u - .5) * W, groundAt(c.u, c.v) * vs + Math.abs(Math.sin(phase)) * .06 * scale * mtw * moving, (c.v - .5) * W);
       root.rotation.y = -c.heading * Math.PI / 180;
       // Shadow: an ellipse along the body, tilted to the (displayed) slope.
@@ -1069,9 +1106,17 @@ export function createNavGame(api) {
       camel.shadow.quaternion.setFromUnitVectors(UP, shadowNormal).multiply(headingTurn.setFromAxisAngle(UP, -c.heading * Math.PI / 180));
       camel.shadow.position.set(root.position.x, groundAt(c.u, c.v) * vs + .15 * mtw, root.position.z);
       camel.shadow.scale.set(.75 * scale * mtw, 1, 1.35 * scale * mtw);
-      const pose = c.state === 'alert' ? .38 : c.state === 'chase' ? -.22 : moving > .2 ? -.38 : -1.4;
+      const pose = c.state === 'alert' ? .22 : c.state === 'chase' ? -.15 : moving > .2 ? -.3 : -1.35;
       camel.pose += (pose - camel.pose) * Math.min(1, dt * 3);
-      camel.neck.rotation.x = camel.pose;
+      poseCamel(camel, { phase, swing, neckPose: camel.pose });
+      // A galloping camel kicks up dust.
+      if (c.state === 'chase' && moving > .5 && world.dust) {
+        camel.dustClock -= dt;
+        if (camel.dustClock <= 0) {
+          camel.dustClock = .12;
+          world.dust.spawn(root.position.x, root.position.y + .3 * mtw, root.position.z, 0, .4 * mtw, 0, 1.4, 2.2 * mtw * scale);
+        }
+      }
       // Eyeshine: caught in the headlamp, a camel's eyes glow back.
       let glow = 0;
       if (lampOn) {
@@ -1171,11 +1216,169 @@ export function createNavGame(api) {
     } catch { /* audio unavailable */ }
   }
 
+  // ——— Realism: wind, effort, grass, dust and the walker's hands ———
+  const fieldAudio = createFieldAudio(() => {
+    if (!soundOn) return null;
+    try { audio ||= new (window.AudioContext || window.webkitAudioContext)(); } catch { return null; }
+    return audio;
+  });
+  const rand01 = Math.random;
+  let hands = null;
+
+  function realSlopeHere() {
+    const o = api.observer;
+    const e = 6 / api.extent();
+    return Math.hypot(api.height(Math.min(1, o.u + e), o.v) - api.height(Math.max(0, o.u - e), o.v), api.height(o.u, Math.min(1, o.v + e)) - api.height(o.u, Math.max(0, o.v - e))) / 12;
+  }
+
+  // Fatigue from running and climbing; breathing (and a grunt on hard climbs) follows it.
+  function stepBody(dt, moving, running) {
+    run.running = moving && running;
+    run.fatigue = stepFatigue(run.fatigue, effortLoad({ moving, running, grade: run.grade }), dt);
+    const breath = breathing(run.fatigue);
+    run.breathClock -= dt;
+    if (run.breathClock <= 0) {
+      run.breathClock = breath.interval;
+      if (soundOn && breath.volume > 0) fieldAudio.breath(breath.volume);
+    }
+    run.gruntClock -= dt;
+    if (moving && run.grade > .14 && run.fatigue > .7 && run.gruntClock <= 0) {
+      run.gruntClock = 5 + rand01() * 4;
+      if (soundOn) fieldAudio.grunt(.6 + run.fatigue * .4);
+    }
+  }
+
+  function kickDust(amount) {
+    const camera = api.camera();
+    const mtw = api.metersToWorld();
+    const o = api.observer;
+    const h = o.heading * Math.PI / 180;
+    for (let k = 0; k < amount; k++) {
+      const x = camera.position.x + (Math.sin(h) * (2 + rand01() * 3) + (rand01() - .5) * 2) * mtw;
+      const z = camera.position.z + (-Math.cos(h) * (2 + rand01() * 3) + (rand01() - .5) * 2) * mtw;
+      world.dust.spawn(x, camera.position.y - 1.9 * mtw, z, (rand01() - .5) * mtw, .5 * mtw, (rand01() - .5) * mtw, 1.2, 1.4 * mtw);
+    }
+  }
+
+  // Grass and shrubs: instances on a tile (60 m / 320 m) anchored to the world that wraps
+  // around the walker. A piece re-sits on the ground only when it wraps into a new cell, so
+  // the work per frame is small. None on paths or rock faces; out of the map they hide.
+  const scatterMatrix = new THREE.Matrix4();
+  const scatterTurn = new THREE.Quaternion();
+  const scatterScale = new THREE.Vector3();
+  const scatterPosition = new THREE.Vector3();
+  function updateScatter(scatter) {
+    const camera = api.camera();
+    const mtw = api.metersToWorld();
+    const W = api.worldSize();
+    const vs = api.verticalScale();
+    const tile = scatter.tile * mtw;
+    let changed = false;
+    scatter.spots.forEach((spot, i) => {
+      const ox = spot.x * tile;
+      const oz = spot.z * tile;
+      const cx = Math.round((camera.position.x - ox) / tile);
+      const cz = Math.round((camera.position.z - oz) / tile);
+      const cell = cx * 100003 + cz;
+      if (spot.cell === cell) return;
+      spot.cell = cell;
+      changed = true;
+      const x = ox + cx * tile;
+      const z = oz + cz * tile;
+      const u = x / W + .5;
+      const v = z / W + .5;
+      let size = spot.size;
+      if (u < 0 || u > 1 || v < 0 || v > 1) size = 0;
+      else {
+        const e = 4 / api.extent();
+        const slope = Math.hypot(api.height(Math.min(1, u + e), v) - api.height(Math.max(0, u - e), v), api.height(u, Math.min(1, v + e)) - api.height(u, Math.max(0, v - e))) / 8;
+        if (slope > scatter.maxSlope + spot.tone * .15) size = 0;
+        else if (scatter.avoidPaths && api.groundInfo?.(u, v)?.onPath) size = 0;
+        else if (points.some((p) => distanceMeters(p, { u, v }, api.extent()) < 6)) size = 0;
+      }
+      scatterTurn.setFromAxisAngle(UP, spot.turn);
+      scatterPosition.set(x, size ? (groundAt(u, v) - (scatter.sink || 0) * size) * vs : -1e3, z);
+      scatterScale.setScalar(Math.max(size, 1e-4) * mtw);
+      scatterMatrix.compose(scatterPosition, scatterTurn, scatterScale);
+      scatter.mesh.setMatrixAt(i, scatterMatrix);
+    });
+    if (changed) scatter.mesh.instanceMatrix.needsUpdate = true;
+  }
+
+  // Far chunks of trees and rocks switch to their low-detail model.
+  function updateChunkDetail() {
+    const camera = api.camera();
+    const far = api.metersToWorld() * 550;
+    for (const mesh of world.chunks || []) {
+      const sphere = mesh.boundingSphere;
+      const d = sphere ? sphere.center.distanceTo(camera.position) - sphere.radius : 0;
+      const geometry = d > far ? mesh.userData.detail.low : mesh.userData.detail.high;
+      if (mesh.geometry !== geometry) mesh.geometry = geometry;
+    }
+  }
+
+  // Every frame: wind (sway, sound, dust), grass, dust, the hands.
+  function updateFieldLife(dt) {
+    const camera = api.camera();
+    const mtw = api.metersToWorld();
+    run.clock2 += dt;
+    const wind = windAt(run.wind, run.clock2);
+    run.windState = wind;
+    windUniforms.uTime.value = run.clock2;
+    windUniforms.uWindDir.value.set(wind.toward.x, wind.toward.z);
+    windUniforms.uWindStrength.value = wind.strength;
+    windUniforms.uMetersPerUnit.value = 1 / mtw;
+    for (const scatter of world.scatters || []) updateScatter(scatter);
+    updateChunkDetail();
+    if (world.dust) {
+      // Strong gusts lift dust that blows past you.
+      if (phase === 'running' && wind.strength > .5 && rand01() < (wind.strength - .5) * dt * 14) {
+        const side = (rand01() - .5) * 60;
+        const back = -25 - rand01() * 20;
+        const x = camera.position.x + (wind.toward.x * back - wind.toward.z * side) * mtw;
+        const z = camera.position.z + (wind.toward.z * back + wind.toward.x * side) * mtw;
+        const speed = (6 + wind.strength * 10) * mtw;
+        world.dust.spawn(x, camera.position.y - 1.5 * mtw, z, wind.toward.x * speed, .3 * mtw, wind.toward.z * speed, 4, (3 + rand01() * 4) * mtw);
+      }
+      const height = api.canvas()?.clientHeight || 600;
+      const scaleFactor = height / (2 * Math.tan(camera.fov * Math.PI / 360));
+      const tint = run.night && run.sky ? new THREE.Color().setRGB(...run.sky.fog.color).multiplyScalar(1.6) : null;
+      world.dust.update(dt, scaleFactor, tint);
+    }
+    if (soundOn && phase === 'running') {
+      const relative = (wind.from - api.observer.heading) * Math.PI / 180;
+      fieldAudio.setWind(wind.strength, Math.sin(relative));
+    } else fieldAudio.stopWind();
+    if (hands) {
+      const show = !run.drone && phase !== 'finished';
+      const keyColor = new THREE.Color();
+      let light;
+      if (run.night && run.sky) {
+        keyColor.setRGB(...run.sky.key.color, THREE.SRGBColorSpace);
+        light = {
+          hemi: run.sky.hemi.intensity, key: run.sky.key.intensity, keyColor,
+          sky: new THREE.Color().setRGB(...run.sky.hemi.sky, THREE.SRGBColorSpace), ground: new THREE.Color().setRGB(...run.sky.hemi.ground, THREE.SRGBColorSpace),
+        };
+      } else light = { hemi: 1.15, key: 2.6, keyColor: keyColor.set(0xfff1d6), sky: new THREE.Color(0xf2f5ff), ground: new THREE.Color(0x5a6650) };
+      const moving = Math.abs(api.observer.bob) > .002;
+      hands.update({
+        dt, walk: run.bob, pace: show && moving ? 1 : 0, running: Boolean(run.running),
+        heading: api.observer.heading, torchOn: run.lamp, showTorch: run.night, light, stunned: run.stun > 0,
+      });
+      api.setOverlay?.(show ? hands.render : null);
+    }
+    // HUD: the wind as a forecaster would say it.
+    run.windText ||= '';
+    const text = `💨 ${describeWind(wind)}`;
+    if (text !== run.windText) { run.windText = text; $('navWind').textContent = text; }
+  }
+
   function start() {
     if (!course || points.length < 3) return;
     api.enter({ exaggeration: relief });
     disposeWorld();
     world = buildWorld();
+    hands ||= createHands();
     buildCompass();
     syncSoundButton();
     resetRun();
@@ -1335,6 +1538,8 @@ export function createNavGame(api) {
     resultsDialog.open && resultsDialog.close();
     document.body.classList.remove('nav-night');
     $('navCamelAlert').hidden = true;
+    fieldAudio.stopWind();
+    api.setOverlay?.(null);
     disposeWorld();
     api.exit();
   }
@@ -1921,7 +2126,9 @@ export function createNavGame(api) {
         // Land cover: forests slow you down, roads and trails speed you up (areas.js).
         run.ground = api.groundInfo?.(o.u, o.v) || null;
         run.pace = slopeSpeedFactor(run.grade) * (run.ground?.speed ?? 1);
-        const speed = baseSpeed(extent) * (running ? RUN_FACTOR : 1) * (dir < 0 ? BACK_FACTOR : 1) * input * run.pace;
+        // Into the wind is slower, with it a little faster; a spent runner slows down.
+        const windFactor = run.windState ? windSpeedFactor(run.windState, o.heading + (dir < 0 ? 180 : 0)) : 1;
+        const speed = baseSpeed(extent) * (running ? RUN_FACTOR * runFactor(run.fatigue) : 1) * (dir < 0 ? BACK_FACTOR : 1) * input * run.pace * windFactor;
         const nu = clamp(o.u + dx * speed * dt / extent, .002, .998);
         const nv = clamp(o.v + dy * speed * dt / extent, .002, .998);
         const step = distanceMeters(o, { u: nu, v: nv }, extent);
@@ -1932,7 +2139,14 @@ export function createNavGame(api) {
         run.legWalked += step;
         if (rise > 0) { run.ascent += rise; run.legAscent += rise; }
         run.bob += step / (running ? 1.9 : 1.4);
-        o.bob = Math.sin(run.bob * Math.PI) * .045;
+        o.bob = Math.sin(run.bob * Math.PI) * (running ? .07 : .045);
+        // A footstep each half cycle of the bob, sounding like the ground underfoot.
+        if (Math.floor(run.bob) !== run.lastStep) {
+          run.lastStep = Math.floor(run.bob);
+          const kind = run.ground?.onPath ? 'road' : run.ground?.area?.includes('יער') ? 'forest' : realSlopeHere() > .25 ? 'rock' : 'grass';
+          if (soundOn) fieldAudio.footstep(kind, running ? 1.5 : 1);
+          if (running && world?.dust && rand01() < .5) kickDust(1);
+        }
         if (run.keysFade > 0) run.keysFade -= dt;
         if (run.keysFade <= 0) $('navKeys').classList.add('faded');
       } else {
@@ -1948,6 +2162,7 @@ export function createNavGame(api) {
         if (Math.hypot(last.u - o.u, last.v - o.v) > .0008) run.track.push({ u: o.u, v: o.v, fly: run.drone });
       }
       checkControls();
+      stepBody(dt, moving && !run.drone, running);
       if (world?.camels?.length) stepCamels(dt);
       if (run.night) advanceClock(dt);
     }
@@ -1957,6 +2172,7 @@ export function createNavGame(api) {
       if (run) updateFlags();
       updateNightObjects();
       updateCamelMeshes(dt);
+      if (run) updateFieldLife(dt);
     }
     if (run) {
       updateCompass();
@@ -2131,6 +2347,7 @@ export function createNavGame(api) {
       camels: (world?.camels || []).filter((camel) => camel.data).map((camel) => ({ u: camel.data.u, v: camel.data.v, state: camel.data.state, distance: metersBetween(camel.data, api.observer, api.extent()) })),
       camelCatches: run.camelCatches, camelEscapes: run.camelEscapes, camelSpotted: run.camelSpotted, stun: run.stun, penalty: penaltySeconds(),
       route: points.map(({ u, v }) => ({ u, v })),
+      fatigue: run.fatigue, wind: run.windState ? { from: run.windState.from, strength: run.windState.strength, text: describeWind(run.windState) } : null,
       night: run.night ? { clock: run.clock, lamp: run.lamp, dark: run.sky?.dark, moonlight: run.sky?.moonlight, moonAlt: run.sky?.moonAlt, moonAz: run.sky?.moonAz, sunAlt: run.sky?.sunAlt, phase: run.sky?.phase.name, stars: run.sky?.stars } : null,
     } : { phase }),
   };

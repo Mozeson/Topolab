@@ -157,6 +157,7 @@
               <div class="nav-clock" id="navClock" hidden></div>
               <div class="nav-progress"><span id="navProgressText">נקודה 1 מתוך 5</span><div class="nav-progress-dots" id="navProgressDots"></div></div>
               <div class="nav-pace"><span>קצב</span><div class="nav-pace-bar"><i id="navPaceBar"></i></div><b id="navSlopeText">מישור</b></div>
+              <div class="nav-wind" id="navWind"></div>
               <div class="nav-penalty" id="navPenalty" hidden></div>
             </div>
             <div class="nav-actions">
@@ -588,6 +589,11 @@
           <label><input type="radio" name="navTime" value="day" checked><b>☀️ יום</b></label>
           <label><input type="radio" name="navTime" value="dusk"><b>🌆 מחשיך</b><small>לפני השקיעה</small></label>
           <label><input type="radio" name="navTime" value="night"><b>🌙 לילה</b></label>
+        </div>
+        <div class="nav-relief nav-quality" role="radiogroup" aria-label="איכות גרפיקה">
+          <span title="קלה: פחות עשב, עצים וסלעים, כדי שירוץ חלק בטלפונים חלשים">גרפיקה</span>
+          <label><input type="radio" name="navQuality" value="full" checked><b>מלאה</b></label>
+          <label><input type="radio" name="navQuality" value="light"><b>קלה</b><small>לטלפונים</small></label>
         </div>
         <div class="nav-moon" id="navMoonRow" hidden>
           <canvas id="navMoonCanvas" width="112" height="112" aria-hidden="true"></canvas>
