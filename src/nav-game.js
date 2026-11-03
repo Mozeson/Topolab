@@ -16,6 +16,8 @@ import {
 import { createFieldAudio } from './field-audio.js';
 import { createWind, windAt, windSpeedFactor, describeWind } from './wind.js';
 import { effortLoad, stepFatigue, breathing, runFactor } from './effort.js';
+import { pickCaveSpot } from './cave.js';
+import { createCaveMound, createCaveInterior, createSkyRoad, CAVE_LENGTH, ROAD } from './netivot.js';
 import { CAMEL, valleyScore, sampleGrid, spawnCamels, stepCamel, separateCamels, metersBetween, detectRadius } from './camels.js';
 import {
   skyState, skyBasis, starVector, BRIGHT_STARS, moonPhase, moonTimes, moonDirection, hebrewDay, formatHour, altitude, azimuth, directionName,
@@ -693,11 +695,15 @@ export function createNavGame(api) {
       group.add(lamp, lampTarget, spill);
     }
     const camels = buildCamels(group, CAMEL.counts[camelsOption] || 0);
+    // The cave blooper: placed per run in a gully (placeCave).
+    const cave = createCaveMound();
+    cave.group.visible = false;
+    group.add(cave.group);
 
     scene.add(group);
     return {
       group, flags, sky, droneShadow, stars, starBasis: new THREE.Matrix4(), lamp, lampTarget, spill, camels,
-      dust, chunks, textures: [orange, magenta, ...extras.textures],
+      dust, chunks, cave, textures: [orange, magenta, ...extras.textures],
       // Scattered around the walker on world-anchored tiles (see updateScatter).
       scatters: [
         { mesh: grass, spots: grassSpots, tile: 60, maxSlope: .38, avoidPaths: true },
@@ -946,9 +952,12 @@ export function createNavGame(api) {
       // Realism: wind (wind.js), effort (effort.js), steps and breaths.
       wind: createWind(random((Math.random() * 2 ** 32) >>> 0)), windState: null, clock2: 0,
       fatigue: 0, breathClock: 2, gruntClock: 0, lastStep: 0, dustClock: 0,
+      // The cave blooper (cave.js, netivot.js).
+      cave: null, nearCave: false, caveHinted: false, caveWarned: -99, blooper: null, netivot: false,
     };
     setDroneUi(false);
     spawnWorldCamels();
+    placeCave();
     configureNightUI();
     Object.assign(api.observer, { u: startPoint.u, v: startPoint.v, heading: 0, tilt: -4, bob: 0 });
   }
@@ -1001,7 +1010,7 @@ export function createNavGame(api) {
 
   function setLamp(on, quiet = false) {
     if (!run) return;
-    run.lamp = Boolean(on && run.night);
+    run.lamp = Boolean(on && (run.night || run.nearCave || run.blooper));
     $('navLampBtn').setAttribute('aria-pressed', String(run.lamp));
     $('navLampBtn').classList.toggle('on', run.lamp);
     if (!quiet) beep([[run.lamp ? 1500 : 950, .035]]);
@@ -1345,12 +1354,12 @@ export function createNavGame(api) {
       const tint = run.night && run.sky ? new THREE.Color().setRGB(...run.sky.fog.color).multiplyScalar(1.6) : null;
       world.dust.update(dt, scaleFactor, tint);
     }
-    if (soundOn && phase === 'running') {
+    if (soundOn && phase === 'running' && !run.blooper) {
       const relative = (wind.from - api.observer.heading) * Math.PI / 180;
       fieldAudio.setWind(wind.strength, Math.sin(relative));
     } else fieldAudio.stopWind();
     if (hands) {
-      const show = !run.drone && phase !== 'finished';
+      const show = !run.drone && phase !== 'finished' && !(run.blooper && run.blooper.stage !== 'cave');
       const keyColor = new THREE.Color();
       let light;
       if (run.night && run.sky) {
@@ -1363,14 +1372,158 @@ export function createNavGame(api) {
       const moving = Math.abs(api.observer.bob) > .002;
       hands.update({
         dt, walk: run.bob, pace: show && moving ? 1 : 0, running: Boolean(run.running),
-        heading: api.observer.heading, torchOn: run.lamp, showTorch: run.night, light, stunned: run.stun > 0,
+        heading: api.observer.heading, torchOn: run.lamp && !(run.blooper?.power < .3), showTorch: run.night || run.nearCave || run.blooper?.stage === 'cave', light, stunned: run.stun > 0,
       });
-      api.setOverlay?.(show ? hands.render : null);
+      const special = run.blooper ? (run.blooper.stage === 'cave' || run.blooper.stage === 'fadeOut' ? caveScene : roadScene) : null;
+      api.setOverlay?.(special ? (renderer, cam) => { special.render(renderer, cam); if (show) hands.render(renderer, cam); } : show ? hands.render : null);
     }
     // HUD: the wind as a forecaster would say it.
     run.windText ||= '';
     const text = `💨 ${describeWind(wind)}`;
     if (text !== run.windText) { run.windText = text; $('navWind').textContent = text; }
+  }
+
+  // ——— The cave blooper ———
+  // A cave in a gully. Go in with a torch, a few metres on it fails, it goes black… and you
+  // are walking a road through the sky to a sign: "ברוך הבא לנתיבות". Then back to the cave.
+  let caveScene = null;
+  let roadScene = null;
+  const caveTrigger = () => Math.max(5, 2.2 * camelScale());
+
+  function placeCave() {
+    const cave = world?.cave;
+    if (!cave) return;
+    ensureValleyGrid();
+    const extent = api.extent();
+    const rng = random((Math.random() * 2 ** 32) >>> 0);
+    const spot = pickCaveSpot({ score: world.valley, n: world.valleyN, rng, extent, avoid: points })
+      || pickCaveSpot({ score: world.valley, n: world.valleyN, rng, extent, avoid: points, clearMeters: 120 });
+    if (!spot) { cave.group.visible = false; run.cave = null; return; }
+    // The mouth faces downhill (down the gully).
+    const e = 20 / extent;
+    const gx = api.height(Math.min(1, spot.u + e), spot.v) - api.height(Math.max(0, spot.u - e), spot.v);
+    const gz = api.height(spot.u, Math.min(1, spot.v + e)) - api.height(spot.u, Math.max(0, spot.v - e));
+    const facing = Math.hypot(gx, gz) > 1e-6 ? (Math.atan2(-gx, gz) * 180 / Math.PI + 360) % 360 : rng() * 360;
+    const scale = camelScale();
+    const mtw = api.metersToWorld();
+    const W = api.worldSize();
+    cave.group.position.set((spot.u - .5) * W, groundAt(spot.u, spot.v) * api.verticalScale(), (spot.v - .5) * W);
+    cave.group.rotation.y = -facing * Math.PI / 180;
+    cave.group.scale.setScalar(scale * mtw);
+    cave.group.visible = true;
+    const h = facing * Math.PI / 180;
+    const out = cave.entranceDepth * scale / extent;
+    run.cave = { u: spot.u, v: spot.v, facing, eu: spot.u + Math.sin(h) * out, ev: spot.v - Math.cos(h) * out };
+  }
+
+  function caveDistance() {
+    return run.cave ? metersBetween({ u: run.cave.eu, v: run.cave.ev }, api.observer, api.extent()) : Infinity;
+  }
+
+  // Near the cave the torch becomes available; in the mouth you need it on to go in.
+  function checkCave() {
+    if (!run.cave || run.drone) { run.nearCave = false; return; }
+    const d = caveDistance();
+    const trigger = caveTrigger();
+    const near = d < trigger * 6;
+    if (near !== run.nearCave) {
+      run.nearCave = near;
+      $('navLampBtn').hidden = !(run.night || near);
+      if (!near && !run.night) setLamp(false, true);
+    }
+    if (d < trigger * 4 && !run.caveHinted) {
+      run.caveHinted = true;
+      flash('🕳️ מערה! בפנים חשוך — הדליקו פנס (L או 🔦)');
+    }
+    if (d >= trigger) return;
+    if (!run.lamp) {
+      // Too dark to go in: step back out of the mouth.
+      const o = api.observer;
+      const k = trigger / Math.max(d, .01);
+      o.u = run.cave.eu + (o.u - run.cave.eu) * k;
+      o.v = run.cave.ev + (o.v - run.cave.ev) * k;
+      if (run.elapsed - run.caveWarned > 3) { run.caveWarned = run.elapsed; flash('🔦 חשוך מדי בפנים — הדליקו פנס', true); }
+      return;
+    }
+    startBlooper();
+  }
+
+  function setFade(opacity, seconds = 0) {
+    const fade = $('navFade');
+    fade.style.transition = seconds ? `opacity ${seconds}s ease` : 'none';
+    fade.style.opacity = String(opacity);
+  }
+
+  function startBlooper() {
+    caveScene ||= createCaveInterior();
+    roadScene ||= createSkyRoad();
+    run.blooper = { stage: 'cave', t: 0, progress: 0, distance: 0, yaw: 0, x: 0, power: 1, said: 0, lastStep: 0 };
+    document.body.classList.add('nav-blooper');
+    keys.delete('ShiftLeft');
+    keys.delete('ShiftRight');
+    flash('🕳️ נכנסים למערה… (W להתקדם)');
+  }
+
+  function stepBlooper(dt, forward, turn) {
+    const b = run.blooper;
+    const o = api.observer;
+    b.t += dt;
+    b.yaw = clamp(b.yaw + turn * 70 * dt, -60, 60);
+    const pitch = clamp(o.tilt, -30, 25);
+    if (b.stage === 'cave') {
+      const step = Math.max(0, forward) * 1.3 * dt;
+      b.progress = Math.min(CAVE_LENGTH, b.progress + step);
+      // The torch starts failing a few metres in, then dies.
+      if (b.progress < 7) b.power = 1;
+      else if (b.progress < 10.5) b.power = Math.random() < .12 ? .15 : 1;
+      else b.power = Math.max(0, 1 - (b.progress - 10.5) / 2.5);
+      if (b.progress > 7 && b.said < 1) { b.said = 1; flash('…הפנס מהבהב'); beep([[180, .05]]); }
+      if (b.progress > 11 && b.said < 2) { b.said = 2; flash('…ממש חשוך'); }
+      if (step && Math.floor(b.progress / .7) !== b.lastStep) { b.lastStep = Math.floor(b.progress / .7); if (soundOn) fieldAudio.footstep('rock', .8); }
+      caveScene.update({ progress: b.progress, yaw: b.yaw, pitch, x: 0, torch: b.power, daylight: run.night ? .1 : 1 });
+      if (b.progress >= 13) { b.stage = 'fadeOut'; b.t = 0; setFade(1, 1.6); }
+    } else if (b.stage === 'fadeOut') {
+      caveScene.update({ progress: b.progress, yaw: b.yaw, pitch, x: 0, torch: 0, daylight: 0 });
+      if (b.t > 2.2) {
+        b.stage = 'road';
+        b.t = 0;
+        b.yaw = 0;
+        setLamp(false, true);
+        setFade(0, 1.8);
+      }
+    } else if (b.stage === 'road' || b.stage === 'sign') {
+      // No choice: the road carries you on, slowly. You can look around and drift a little.
+      const speed = b.stage === 'sign' ? .7 : 1.5 + Math.max(0, forward) * .5;
+      const stop = ROAD.signAt - 4.5;
+      const step = Math.min(speed * dt, Math.max(0, stop - b.distance));
+      b.distance += step * Math.cos(b.yaw * Math.PI / 180);
+      b.x = clamp(b.x + step * Math.sin(b.yaw * Math.PI / 180), -ROAD.width / 2 + .7, ROAD.width / 2 - .7);
+      if (step && Math.floor(b.distance / .75) !== b.lastStep) { b.lastStep = Math.floor(b.distance / .75); if (soundOn) fieldAudio.footstep('road', .9); }
+      const bob = Math.sin(b.distance / .75 * Math.PI) * .03;
+      roadScene.update({ distance: b.distance, x: b.x, yaw: b.yaw, pitch, bob });
+      if (b.stage === 'road' && b.distance >= ROAD.signAt - 9) { b.stage = 'sign'; b.t = 0; flash('🙃 ברוך הבא לנתיבות'); beep([[523, .15], [659, .15], [784, .3]]); }
+      if (b.stage === 'sign' && b.t > 5) { b.stage = 'fadeBack'; b.t = 0; setFade(1, 1.4); }
+    } else if (b.stage === 'fadeBack') {
+      roadScene.update({ distance: b.distance, x: b.x, yaw: b.yaw, pitch, bob: 0 });
+      if (b.t > 1.8) endBlooper();
+    }
+  }
+
+  function endBlooper() {
+    run.blooper = null;
+    run.netivot = true;
+    run.caveHinted = true;
+    document.body.classList.remove('nav-blooper');
+    // Back outside the cave, facing away from it.
+    const o = api.observer;
+    const h = run.cave.facing * Math.PI / 180;
+    const out = caveTrigger() * 2.5 / api.extent();
+    o.u = clamp(run.cave.eu + Math.sin(h) * out, .002, .998);
+    o.v = clamp(run.cave.ev - Math.cos(h) * out, .002, .998);
+    o.heading = run.cave.facing;
+    o.tilt = -4;
+    setFade(0, 1.6);
+    flash('😵 …ושוב אתם ליד המערה. מה זה היה?');
   }
 
   function start() {
@@ -1512,6 +1665,8 @@ export function createNavGame(api) {
 
   function restart() {
     resultsDialog.open && resultsDialog.close();
+    document.body.classList.remove('nav-blooper');
+    setFade(0);
     clearTimeout(countdownTimer);
     if (world) world.flags.forEach((f) => f.userData.materials.forEach((m) => { m.opacity = 1; }));
     if (run?.drone) { Object.assign(api.observer, { flyY: undefined, roll: 0, shake: 0, fov: undefined }); api.setDrone?.(false); }
@@ -1540,6 +1695,8 @@ export function createNavGame(api) {
     $('navCamelAlert').hidden = true;
     fieldAudio.stopWind();
     api.setOverlay?.(null);
+    document.body.classList.remove('nav-blooper');
+    setFade(0);
     disposeWorld();
     api.exit();
   }
@@ -2037,7 +2194,7 @@ export function createNavGame(api) {
       if (run?.fpv && event.code === 'KeyR') { event.preventDefault(); startTrick(); return; }
     }
     if (event.code === 'KeyM') { event.preventDefault(); if (!event.repeat) toggleMap(); return; }
-    if (event.code === 'KeyL' && run?.night) { event.preventDefault(); if (!event.repeat) setLamp(!run.lamp); return; }
+    if (event.code === 'KeyL' && (run?.night || run?.nearCave)) { event.preventDefault(); if (!event.repeat) setLamp(!run.lamp); return; }
     if (MOVE_KEYS.has(event.code)) { event.preventDefault(); keys.add(event.code); }
   }, true);
   document.addEventListener('keyup', (event) => keys.delete(event.code), true);
@@ -2081,90 +2238,94 @@ export function createNavGame(api) {
       const strafe = clamp(sticks.move.x, -1, 1);
       const turn = clamp((has('KeyD', 'ArrowRight') ? 1 : 0) - (has('KeyA', 'ArrowLeft') ? 1 : 0) + sticks.look.x, -1, 1);
       const running = has('ShiftLeft', 'ShiftRight') || Math.hypot(sticks.move.x, sticks.move.y) > .97;
-      run.elapsed += dt;
-      if (!run.fpv) o.heading = (o.heading + turn * TURN_SPEED * dt + 360) % 360;
-      const extent = api.extent();
-      // A camel that caught you leaves you stunned for a moment.
-      const stunned = run.stun > 0;
-      if (stunned) run.stun -= dt;
-      const moving = !stunned && Math.hypot(forward, strafe) > .05;
-      if (run.fpv) {
-        fpvStep(dt, {
-          throttle: (has('KeyW') ? 1 : 0) - (has('KeyS') ? 1 : 0) + sticks.move.y,
-          yaw: clamp((has('KeyD', 'ArrowRight') ? 1 : 0) - (has('KeyA', 'ArrowLeft') ? 1 : 0) + sticks.move.x, -1, 1),
-          pitchDown: clamp((has('ArrowUp') ? 1 : 0) - (has('ArrowDown') ? 1 : 0) + sticks.look.y, -1, 1),
-          strafe: clamp(sticks.look.x, -1, 1),
-          climb: clamp((has('KeyE', 'Space', 'PageUp') ? 1 : 0) - (has('KeyQ', 'PageDown') ? 1 : 0) + droneClimbInput, -1, 1),
-          boost: has('ShiftLeft', 'ShiftRight') || sticks.move.y > .95, // touch: stick pushed all the way forward
-        });
-      } else if (run.drone) {
-        o.tilt = clamp(o.tilt + sticks.look.y * 60 * dt, -89, 10);
-        flyStep(dt, forward, strafe, running);
-      } else {
-        o.tilt = clamp(o.tilt + sticks.look.y * 50 * dt, -40, 35);
-        run.battery = stepBattery(run.battery, dt, false);
-      }
-      if (run.drone) {
-        // flying: handled in flyStep
-      } else if (moving) {
-        // Direction of travel: forward/back along the heading plus a sideways component.
-        const rad = o.heading * Math.PI / 180;
-        const fx = Math.sin(rad);
-        const fy = -Math.cos(rad);
-        const sideFactor = .7;
-        let dx = fx * forward + -fy * strafe * sideFactor;
-        let dy = fy * forward + fx * strafe * sideFactor;
-        const magnitude = Math.hypot(dx, dy) || 1;
-        const input = Math.min(1, magnitude);
-        dx /= magnitude;
-        dy /= magnitude;
-        const dir = forward < -.05 && Math.abs(forward) >= Math.abs(strafe) ? -1 : 1;
-        const here = api.height(o.u, o.v);
-        const probe = 8 / extent;
-        const ahead = api.height(clamp(o.u + dx * probe, 0, 1), clamp(o.v + dy * probe, 0, 1));
-        run.grade = (ahead - here) / 8;
-        // Land cover: forests slow you down, roads and trails speed you up (areas.js).
-        run.ground = api.groundInfo?.(o.u, o.v) || null;
-        run.pace = slopeSpeedFactor(run.grade) * (run.ground?.speed ?? 1);
-        // Into the wind is slower, with it a little faster; a spent runner slows down.
-        const windFactor = run.windState ? windSpeedFactor(run.windState, o.heading + (dir < 0 ? 180 : 0)) : 1;
-        const speed = baseSpeed(extent) * (running ? RUN_FACTOR * runFactor(run.fatigue) : 1) * (dir < 0 ? BACK_FACTOR : 1) * input * run.pace * windFactor;
-        const nu = clamp(o.u + dx * speed * dt / extent, .002, .998);
-        const nv = clamp(o.v + dy * speed * dt / extent, .002, .998);
-        const step = distanceMeters(o, { u: nu, v: nv }, extent);
-        const rise = api.height(nu, nv) - here;
-        o.u = nu;
-        o.v = nv;
-        run.walked += step;
-        run.legWalked += step;
-        if (rise > 0) { run.ascent += rise; run.legAscent += rise; }
-        run.bob += step / (running ? 1.9 : 1.4);
-        o.bob = Math.sin(run.bob * Math.PI) * (running ? .07 : .045);
-        // A footstep each half cycle of the bob, sounding like the ground underfoot.
-        if (Math.floor(run.bob) !== run.lastStep) {
-          run.lastStep = Math.floor(run.bob);
-          const kind = run.ground?.onPath ? 'road' : run.ground?.area?.includes('יער') ? 'forest' : realSlopeHere() > .25 ? 'rock' : 'grass';
-          if (soundOn) fieldAudio.footstep(kind, running ? 1.5 : 1);
-          if (running && world?.dust && rand01() < .5) kickDust(1);
+      if (run.blooper) stepBlooper(dt, forward, turn);
+      else {
+        run.elapsed += dt;
+        if (!run.fpv) o.heading = (o.heading + turn * TURN_SPEED * dt + 360) % 360;
+        const extent = api.extent();
+        // A camel that caught you leaves you stunned for a moment.
+        const stunned = run.stun > 0;
+        if (stunned) run.stun -= dt;
+        const moving = !stunned && Math.hypot(forward, strafe) > .05;
+        if (run.fpv) {
+          fpvStep(dt, {
+            throttle: (has('KeyW') ? 1 : 0) - (has('KeyS') ? 1 : 0) + sticks.move.y,
+            yaw: clamp((has('KeyD', 'ArrowRight') ? 1 : 0) - (has('KeyA', 'ArrowLeft') ? 1 : 0) + sticks.move.x, -1, 1),
+            pitchDown: clamp((has('ArrowUp') ? 1 : 0) - (has('ArrowDown') ? 1 : 0) + sticks.look.y, -1, 1),
+            strafe: clamp(sticks.look.x, -1, 1),
+            climb: clamp((has('KeyE', 'Space', 'PageUp') ? 1 : 0) - (has('KeyQ', 'PageDown') ? 1 : 0) + droneClimbInput, -1, 1),
+            boost: has('ShiftLeft', 'ShiftRight') || sticks.move.y > .95, // touch: stick pushed all the way forward
+          });
+        } else if (run.drone) {
+          o.tilt = clamp(o.tilt + sticks.look.y * 60 * dt, -89, 10);
+          flyStep(dt, forward, strafe, running);
+        } else {
+          o.tilt = clamp(o.tilt + sticks.look.y * 50 * dt, -40, 35);
+          run.battery = stepBattery(run.battery, dt, false);
         }
-        if (run.keysFade > 0) run.keysFade -= dt;
-        if (run.keysFade <= 0) $('navKeys').classList.add('faded');
-      } else {
-        run.pace = 1;
-        run.ground = api.groundInfo?.(o.u, o.v) || null;
-        run.grade = 0;
-        o.bob *= .85;
+        if (run.drone) {
+          // flying: handled in flyStep
+        } else if (moving) {
+          // Direction of travel: forward/back along the heading plus a sideways component.
+          const rad = o.heading * Math.PI / 180;
+          const fx = Math.sin(rad);
+          const fy = -Math.cos(rad);
+          const sideFactor = .7;
+          let dx = fx * forward + -fy * strafe * sideFactor;
+          let dy = fy * forward + fx * strafe * sideFactor;
+          const magnitude = Math.hypot(dx, dy) || 1;
+          const input = Math.min(1, magnitude);
+          dx /= magnitude;
+          dy /= magnitude;
+          const dir = forward < -.05 && Math.abs(forward) >= Math.abs(strafe) ? -1 : 1;
+          const here = api.height(o.u, o.v);
+          const probe = 8 / extent;
+          const ahead = api.height(clamp(o.u + dx * probe, 0, 1), clamp(o.v + dy * probe, 0, 1));
+          run.grade = (ahead - here) / 8;
+          // Land cover: forests slow you down, roads and trails speed you up (areas.js).
+          run.ground = api.groundInfo?.(o.u, o.v) || null;
+          run.pace = slopeSpeedFactor(run.grade) * (run.ground?.speed ?? 1);
+          // Into the wind is slower, with it a little faster; a spent runner slows down.
+          const windFactor = run.windState ? windSpeedFactor(run.windState, o.heading + (dir < 0 ? 180 : 0)) : 1;
+          const speed = baseSpeed(extent) * (running ? RUN_FACTOR * runFactor(run.fatigue) : 1) * (dir < 0 ? BACK_FACTOR : 1) * input * run.pace * windFactor;
+          const nu = clamp(o.u + dx * speed * dt / extent, .002, .998);
+          const nv = clamp(o.v + dy * speed * dt / extent, .002, .998);
+          const step = distanceMeters(o, { u: nu, v: nv }, extent);
+          const rise = api.height(nu, nv) - here;
+          o.u = nu;
+          o.v = nv;
+          run.walked += step;
+          run.legWalked += step;
+          if (rise > 0) { run.ascent += rise; run.legAscent += rise; }
+          run.bob += step / (running ? 1.9 : 1.4);
+          o.bob = Math.sin(run.bob * Math.PI) * (running ? .07 : .045);
+          // A footstep each half cycle of the bob, sounding like the ground underfoot.
+          if (Math.floor(run.bob) !== run.lastStep) {
+            run.lastStep = Math.floor(run.bob);
+            const kind = run.ground?.onPath ? 'road' : run.ground?.area?.includes('יער') ? 'forest' : realSlopeHere() > .25 ? 'rock' : 'grass';
+            if (soundOn) fieldAudio.footstep(kind, running ? 1.5 : 1);
+            if (running && world?.dust && rand01() < .5) kickDust(1);
+          }
+          if (run.keysFade > 0) run.keysFade -= dt;
+          if (run.keysFade <= 0) $('navKeys').classList.add('faded');
+        } else {
+          run.pace = 1;
+          run.ground = api.groundInfo?.(o.u, o.v) || null;
+          run.grade = 0;
+          o.bob *= .85;
+        }
+        run.trackClock += dt;
+        if (run.trackClock > .3) {
+          run.trackClock = 0;
+          const last = run.track.at(-1);
+          if (Math.hypot(last.u - o.u, last.v - o.v) > .0008) run.track.push({ u: o.u, v: o.v, fly: run.drone });
+        }
+        checkControls();
+        stepBody(dt, moving && !run.drone, running);
+        if (world?.camels?.length) stepCamels(dt);
+        if (run.night) advanceClock(dt);
+        checkCave();
       }
-      run.trackClock += dt;
-      if (run.trackClock > .3) {
-        run.trackClock = 0;
-        const last = run.track.at(-1);
-        if (Math.hypot(last.u - o.u, last.v - o.v) > .0008) run.track.push({ u: o.u, v: o.v, fly: run.drone });
-      }
-      checkControls();
-      stepBody(dt, moving && !run.drone, running);
-      if (world?.camels?.length) stepCamels(dt);
-      if (run.night) advanceClock(dt);
     }
     api.updateCamera();
     if (world) {
@@ -2253,6 +2414,7 @@ export function createNavGame(api) {
       ...(run.tricks ? [['טריקים', `🌀 ${run.tricks}`]] : []),
       ...(run.crashes ? [['התרסקויות', `💥 ${run.crashes}`]] : []),
       ...(world?.camels?.some((camel) => camel.data) ? [['🐪 גמלים', run.camelCatches || run.camelEscapes ? `נתפסתם ${run.camelCatches} · ברחתם ${run.camelEscapes}` : 'לא נתפסתם']] : []),
+      ...(run.netivot ? [['🕳️ מערה', 'ביקרתם בנתיבות']] : []),
       ...(run.night ? [[`${moonPhase(moonDay, run.clock).emoji} שעה`, `${formatHour(run.startClock)}–${formatHour(run.clock)} · ${hebrewDay(moonDay)} בחודש`]] : []),
       [settings.mapMode === 'peek' ? 'הצצות במפה' : 'מפה', settings.mapMode === 'peek' ? String(run.peeks) : settings.mapMode === 'none' ? 'מהזיכרון' : 'פתוחה'],
     ];
@@ -2323,6 +2485,24 @@ export function createNavGame(api) {
       o.tilt = clamp(Math.atan2(rise, meters) * 180 / Math.PI, -40, 35);
       return true;
     },
+    // Test hook: jump ahead in the blooper to `distance` metres along the road.
+    debugRoad(distance = 30) {
+      if (!run) return false;
+      if (!run.blooper) startBlooper();
+      Object.assign(run.blooper, { stage: 'road', t: 0, distance, progress: 13 });
+      setFade(0);
+      return true;
+    },
+    // Test hook: stand `meters` in front of the cave's mouth, facing it.
+    debugCave(meters = 20) {
+      if (!run?.cave) return false;
+      const h = run.cave.facing * Math.PI / 180;
+      Object.assign(api.observer, {
+        u: run.cave.eu + Math.sin(h) * meters / api.extent(), v: run.cave.ev - Math.cos(h) * meters / api.extent(),
+        heading: (run.cave.facing + 180) % 360, tilt: -4,
+      });
+      return true;
+    },
     // Test hook: set the sky clock (hours on the evening clock).
     debugClock(hour) {
       if (!run?.night) return;
@@ -2345,6 +2525,7 @@ export function createNavGame(api) {
       drone: { active: run.drone, landing: run.landing, used: run.droneUsed, agl: run.drone ? droneAgl() : 0, battery: run.battery, flown: run.flown,
         fpv: run.fpv, speedKmh: Math.round(run.droneSpeed * 3.6), maxKmh: Math.round(run.maxSpeed * 3.6), tricks: run.tricks, crashes: run.crashes, fov: run.fov, roll: api.observer.roll || 0 },
       camels: (world?.camels || []).filter((camel) => camel.data).map((camel) => ({ u: camel.data.u, v: camel.data.v, state: camel.data.state, distance: metersBetween(camel.data, api.observer, api.extent()) })),
+      cave: run.cave, nearCave: run.nearCave, blooper: run.blooper ? { stage: run.blooper.stage, progress: run.blooper.progress, distance: run.blooper.distance } : null, netivot: run.netivot,
       camelCatches: run.camelCatches, camelEscapes: run.camelEscapes, camelSpotted: run.camelSpotted, stun: run.stun, penalty: penaltySeconds(),
       route: points.map(({ u, v }) => ({ u, v })),
       fatigue: run.fatigue, wind: run.windState ? { from: run.windState.from, strength: run.windState.strength, text: describeWind(run.windState) } : null,

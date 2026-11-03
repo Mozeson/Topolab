@@ -2953,6 +2953,8 @@ window.__NAV_PLACE__ = (u, v, heading) => navGame?.debugPlace(u, v, heading);
 window.__NAV_DRONE__ = () => navGame?.debugDrone();
 window.__NAV_CAMEL__ = (meters, camelState, turn) => navGame?.debugCamel(meters, camelState, turn);
 window.__NAV_CLOCK__ = (hour) => navGame?.debugClock(hour);
+window.__NAV_CAVE__ = (meters) => navGame?.debugCave(meters);
+window.__NAV_ROAD__ = (distance) => navGame?.debugRoad(distance);
 window.__APP_STATS__ = () => ({
   gridVertices: N * N,
   gridResolution: N,

@@ -1059,3 +1059,8 @@ body.nav-night #navMapCanvas { filter: sepia(.5) hue-rotate(-25deg) saturate(1.5
 /* Wind in the HUD (wind.js) */
 .nav-wind { font-size: 12px; color: #cfe3ff; }
 @media (max-width: 640px), (pointer: coarse) and (max-height: 500px) { .nav-wind { display: none; } }
+
+/* The cave blooper (netivot.js): a fade to black, and the field HUD out of the way. */
+.nav-fade { position: absolute; inset: 0; background: #000; opacity: 0; pointer-events: none; }
+body.nav-blooper .nav-map, body.nav-blooper .nav-compass, body.nav-blooper .nav-hint, body.nav-blooper .nav-peek,
+body.nav-blooper .nav-camel-alert, body.nav-blooper .nav-keys, body.nav-blooper .nav-wind, body.nav-blooper .nav-pace { display: none !important; }
