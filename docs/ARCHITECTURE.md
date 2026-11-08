@@ -32,6 +32,8 @@ index.html ── src/style.css
            ├── team.js             ניווט קבוצתי: חלוקת הציר, כולם בנקודה, מי התרחק (טהור; גם בשרת)
            ├── multiplayer.js      חלון "קבוצה" ו־WebSocket לחדרים. docs/MULTIPLAYER.md
            ├── ghosts.js           ג״ג: הקו סביב המסלול והרוחות (טהור, עם בדיקות)
+           ├── map-import.js       ייבוא מפה: מיקום משתי נקודות, הלבשה על השטח, PDF, IndexedDB. docs/MAP-IMPORT.md
+           ├── map-import-ui.js    חלון "ייבוא מפה": העלאה, סימון נקודות, בחירת אזור
            ├── itm.js              רשת ישראל (ITM) ↔ WGS84 (טהור, עם בדיקות)
            ├── real-terrain.js     שטח אמיתי: אריחי גובה, OSM → תכסית, דאטום. docs/REAL-TERRAIN.md
            ├── rain.js             סימולטור הגשם: נחלים, אגמים, יציאות, אנימציה (2D + 3D). docs/RAIN.md

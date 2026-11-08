@@ -14,6 +14,7 @@
   "dependencies": {
     "d3-contour": "^4.0.2",
     "jspdf": "^4.2.1",
+    "pdfjs-dist": "^5.7.284",
     "three": "^0.180.0",
     "ws": "^8.22.1"
   },

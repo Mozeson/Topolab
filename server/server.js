@@ -21,7 +21,7 @@ const ROOM_IDLE_MS = 3 * 3600e3;
 
 // ——— Static files ———
 const TYPES = {
-  '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
+  '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
   '.json': 'application/json', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.svg': 'image/svg+xml',
   '.webp': 'image/webp', '.ico': 'image/x-icon', '.hdr': 'image/vnd.radiance', '.woff2': 'font/woff2', '.txt': 'text/plain; charset=utf-8',
   '.md': 'text/markdown; charset=utf-8', '.wasm': 'application/wasm',
@@ -41,7 +41,7 @@ function serveStatic(req, res) {
       const rel = path.relative(DIST, file).split(path.sep).join('/');
       const headers = { 'Content-Type': TYPES[ext] || 'application/octet-stream', 'Content-Length': stat2.size };
       // Built scripts and styles carry a content hash: cache for good. The page is always revalidated.
-      if (/^assets\/[^/]+\.(js|css)$/.test(rel)) headers['Cache-Control'] = 'public, max-age=31536000, immutable';
+      if (/^assets\/[^/]+\.(m?js|css)$/.test(rel)) headers['Cache-Control'] = 'public, max-age=31536000, immutable';
       else if (ext === '.html') headers['Cache-Control'] = 'no-cache';
       else headers['Cache-Control'] = 'public, max-age=3600';
       res.writeHead(200, headers);

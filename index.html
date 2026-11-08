@@ -525,6 +525,7 @@
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s-7-6.2-7-11.5A7 7 0 0 1 19 9.5C19 14.8 12 21 12 21Z"/><circle cx="12" cy="9.5" r="2.5"/></svg>
               טעינת השטח האמיתי
             </button>
+            <button class="footer-button import-map-btn" id="importMapBtn" type="button">🗺️ ייבוא מפה שלכם (תמונה או PDF)</button>
             <p class="popover-note" id="realTerrainStatus" role="status">נ״צ ברשת ישראל (במטרים) של מרכז המפה. נטענים גבהים אמיתיים, דרכים, שבילים, נחלים ותכסית.</p>
           </div>
           <p class="popover-section-title">מפה אקראית</p>
@@ -585,6 +586,56 @@
     <h3 class="shortcuts-title">קיצורי מקלדת</h3>
     <dl class="shortcut-list" id="shortcutList"></dl>
     <button class="button button-primary dialog-done" id="doneHelpBtn" type="button">הבנתי, נתחיל</button>
+  </dialog>
+
+  <dialog class="import-dialog" id="importDialog" aria-labelledby="importTitle">
+    <div class="dialog-heading">
+      <div><span class="panel-kicker">שטח אמיתי</span><h2 id="importTitle">ייבוא מפה</h2></div>
+      <button class="icon-button" id="closeImportBtn" type="button" aria-label="סגירה"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+    </div>
+    <section id="importPick">
+      <p class="team-lead">מפה סרוקה, צילום של מפה או PDF. מסמנים עליה שתי נקודות שהנ״צ שלהן ידוע, בוחרים אזור, ו־Topolab טוען את הגבהים האמיתיים שלו ומלביש עליהם את המפה: במפה, בתלת־ממד ובניווט.</p>
+      <label class="import-drop" for="importFile"><span>📄 בחירת קובץ…</span><small>JPG · PNG · PDF</small><input id="importFile" type="file" accept="image/*,.pdf,application/pdf"></label>
+      <label class="footer-control" id="importPageRow" hidden>עמוד <select id="importPage"></select></label>
+      <p class="team-hint" id="importBusy" hidden>טוען…</p>
+      <p class="team-hint">הקובץ נשאר בדפדפן שלכם ולא נשלח לשום מקום (חוץ מלחברי הקבוצה בניווט קבוצתי). השתמשו במפות שמותר לכם להשתמש בהן.</p>
+      <p class="team-error" id="importError" role="alert" hidden></p>
+    </section>
+    <section id="importWork" hidden>
+      <div class="import-viewer">
+        <canvas id="importCanvas" aria-label="המפה שהועלתה. גררו להזזה, גלגלת או צביטה לזום, לחיצה לסימון"></canvas>
+        <div class="import-zoom">
+          <button type="button" id="importZoomIn" aria-label="קירוב">+</button>
+          <button type="button" id="importZoomOut" aria-label="התרחקות">−</button>
+          <button type="button" id="importFit" aria-label="התאמה למסך">⤢</button>
+        </div>
+      </div>
+      <div class="import-side">
+        <p class="import-step" id="importStep" role="status"></p>
+        <div class="import-points">
+          <div class="import-point" id="importPoint0"><button type="button" class="import-point-btn">נקודה א׳</button>
+            <label>מזרח <input id="importE0" inputmode="numeric" placeholder="236000"></label><label>צפון <input id="importN0" inputmode="numeric" placeholder="732000"></label></div>
+          <div class="import-point" id="importPoint1"><button type="button" class="import-point-btn">נקודה ב׳</button>
+            <label>מזרח <input id="importE1" inputmode="numeric" placeholder="239000"></label><label>צפון <input id="importN1" inputmode="numeric" placeholder="735000"></label></div>
+        </div>
+        <p class="team-hint" id="importScale"></p>
+        <div class="import-area" id="importArea" hidden>
+          <label class="footer-control">גודל השטח <select id="importSize"><option value="1">1 ק״מ</option><option value="4" selected>4 ק״מ</option><option value="6">6 ק״מ</option><option value="8">8 ק״מ</option></select></label>
+          <p class="team-hint" id="importCoverage"></p>
+        </div>
+        <button class="button button-go" id="importLoadBtn" type="button" disabled>טעינת השטח עם המפה ▶</button>
+      </div>
+    </section>
+    <section id="importView" hidden>
+      <p class="team-lead">על השטח מולבשת: <b id="importViewName"></b></p>
+      <label class="team-field" for="importOpacity">שקיפות המפה <input id="importOpacity" type="range" min="20" max="100" step="5" value="100"></label>
+      <label class="import-check"><input type="checkbox" id="importOwnContours"> גם קווי הגובה של Topolab</label>
+      <label class="import-check"><input type="checkbox" id="importOsm"> גם הדרכים, השבילים והשמות מ־OpenStreetMap</label>
+      <div class="team-host-actions">
+        <button class="button" id="importAnotherBtn" type="button">ייבוא מפה אחרת</button>
+        <button class="button pdf-cancel-button" id="importRemoveBtn" type="button">הסרת המפה המיובאת</button>
+      </div>
+    </section>
   </dialog>
 
   <dialog class="team-dialog" id="teamDialog" aria-labelledby="teamTitle">

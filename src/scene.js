@@ -11,6 +11,8 @@ import { createHistory } from './history.js';
 import { applyHeightBrush, applySmoothBrush, applySmudgeBrush, applyPinchBrush, applyFlattenBrush, slopePercent, SCULPT_TOOLS, SHAPE_TOOLS } from './brush.js';
 import { createAutosave, loadProject, clearProject, serializeProject, parseProject } from './persistence.js';
 import { createTeam } from './multiplayer.js';
+import { buildDrape, drapeSize, saveDrape, loadDrape, clearDrape } from './map-import.js';
+import { createMapImport } from './map-import-ui.js';
 import { initShortcuts, SHORTCUTS, HOLD_HINTS, shortcutLabel } from './shortcuts.js';
 import { emptyCourse, sanitizeCourse, isRunnable, generateCourse, courseLength, drawCourse, coursePoints, cloneCourse } from './course.js';
 import { createNavGame } from './nav-game.js';
@@ -118,6 +120,15 @@ function lerp(a, b, t) { return a + (b - a) * t; }
 
 // Above-sea-level height as shown to the user.
 const displayHeight = (h) => h + state.datum;
+
+// An imported map (map-import.js) draped over a real place: { canvas, texture, origin,
+// extent, opacity, ownContours, osm, name }. It shows only while the map is that place.
+let drape = null;
+let drapeBlob = null; // the kept JPEG, re-saved when the view options change
+const drapeActive = () => Boolean(drape && state.realPlace && drape.origin.e === state.gridOrigin.e
+  && drape.origin.n === state.gridOrigin.n && drape.extent === mapExtentMeters());
+const showOwnContours = () => !drapeActive() || drape.ownContours;
+const showOsm = () => !drapeActive() || drape.osm;
 const heightCeiling = () => Math.max(MAX_HEIGHT, state.heightMax);
 
 function heightColor(h, editing = false) {
@@ -213,6 +224,16 @@ function hillshade(x, y) {
 }
 
 function drawRaster() {
+  if (drapeActive()) {
+    mapCtx.fillStyle = '#ffffff';
+    mapCtx.fillRect(0, 0, mapCanvas.width, mapCanvas.height);
+    mapCtx.save();
+    mapCtx.globalAlpha = drape.opacity;
+    mapCtx.imageSmoothingQuality = 'high';
+    mapCtx.drawImage(drape.canvas, 0, 0, mapCanvas.width, mapCanvas.height);
+    mapCtx.restore();
+    return;
+  }
   if (state.topo) {
     mapCtx.fillStyle = '#fdfcf8';
     mapCtx.fillRect(0, 0, mapCanvas.width, mapCanvas.height);
@@ -667,21 +688,21 @@ function drawMap() {
   if (!mapCanvas.width || !mapCanvas.height) return;
   mapCtx.clearRect(0, 0, mapCanvas.width, mapCanvas.height);
   drawRaster();
-  mapFeatures?.draw2D(mapCtx, mapCanvas, mapDpr, false, { lines: false }); // land cover under the contours
+  if (showOsm()) mapFeatures?.draw2D(mapCtx, mapCanvas, mapDpr, false, { lines: false }); // land cover under the contours
   if (state.topo) {
     drawGridLines(mapCtx, mapCanvas.width, mapCanvas.height, mapDpr);
-    drawContours(mapCtx, mapCanvas.width, mapCanvas.height, mapDpr);
+    if (showOwnContours()) drawContours(mapCtx, mapCanvas.width, mapCanvas.height, mapDpr);
     drawGridLabels(mapCtx, mapCanvas.width, mapCanvas.height, mapDpr);
   }
   rainSimulation?.draw2D(mapCtx, mapCanvas, mapDpr);
-  mapFeatures?.draw2D(mapCtx, mapCanvas, mapDpr, true, { areas: false });
+  if (showOsm()) mapFeatures?.draw2D(mapCtx, mapCanvas, mapDpr, true, { areas: false });
   if (state.course.start) {
     mapCtx.save();
     if (state.tool !== 'course') mapCtx.globalAlpha = .55;
     drawCourse(mapCtx, state.course, { width: mapCanvas.width, height: mapCanvas.height, dpr: mapDpr });
     mapCtx.restore();
   }
-  drawPlaceLabels(mapCtx, mapCanvas.width, mapCanvas.height, mapDpr);
+  if (showOsm()) drawPlaceLabels(mapCtx, mapCanvas.width, mapCanvas.height, mapDpr);
   drawWaypoints(mapCtx, mapCanvas.width, mapCanvas.height, mapDpr);
   sheepGame?.draw(mapCtx, mapCanvas, mapDpr);
   drawObserver();
@@ -692,7 +713,15 @@ function drawMap() {
 function drawPrintBlock(ctx, w, h, dpr, options = {}) {
   ctx.fillStyle = '#fdfcf8';
   ctx.fillRect(0, 0, w, h);
-  if (options.mapStyle !== 'contours') {
+  if (drapeActive()) {
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, w, h);
+    ctx.save();
+    ctx.globalAlpha = drape.opacity;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(drape.canvas, 0, 0, w, h);
+    ctx.restore();
+  } else if (options.mapStyle !== 'contours') {
     const printRaster = document.createElement('canvas');
     printRaster.width = N;
     printRaster.height = N;
@@ -726,11 +755,12 @@ function drawPrintBlock(ctx, w, h, dpr, options = {}) {
     ctx.strokeRect(1 * dpr, 1 * dpr, w - 2 * dpr, h - 2 * dpr);
     ctx.restore();
   }
-  if (options.showFeatures !== false) mapFeatures?.draw2D(ctx, { width: w, height: h }, dpr, false, { lines: false });
-  drawContours(ctx, w, h, dpr);
+  const osm = options.showFeatures !== false && showOsm();
+  if (osm) mapFeatures?.draw2D(ctx, { width: w, height: h }, dpr, false, { lines: false });
+  if (showOwnContours()) drawContours(ctx, w, h, dpr);
   if (options.showCoordinates !== false) drawGridLabels(ctx, w, h, dpr);
-  if (options.showFeatures !== false) mapFeatures?.draw2D(ctx, { width: w, height: h }, dpr, false, { areas: false });
-  if (options.showFeatures !== false) drawPlaceLabels(ctx, w, h, dpr);
+  if (osm) mapFeatures?.draw2D(ctx, { width: w, height: h }, dpr, false, { areas: false });
+  if (osm) drawPlaceLabels(ctx, w, h, dpr);
   if (options.showFeatures !== false) drawWaypoints(ctx, w, h, dpr);
 }
 
@@ -870,6 +900,8 @@ function installContourShader(material) {
     uExaggeration: { value: 1 },   // the field's vertical exaggeration: ground types follow the real slope
     // Engine v2 (field-engine.js): photographed materials, once loaded.
     uTexReady: { value: 0 },
+    uDrape: { value: null },       // an imported map draped over the model (map-import.js)
+    uDrapeMix: { value: 0 },
     uTexGain: { value: 1.12 },     // photographed albedo is darker: more gain where the photo sky doesn't light it
     uGrassMap: { value: null }, uGrassNormal: { value: null },
     uSoilMap: { value: null }, uSoilNormal: { value: null },
@@ -893,6 +925,8 @@ function installContourShader(material) {
         uniform float uHalfWorld;
         uniform float uExaggeration;
         uniform float uTexReady;
+        uniform sampler2D uDrape;
+        uniform float uDrapeMix;
         uniform float uTexGain;
         uniform sampler2D uGrassMap; uniform sampler2D uGrassNormal;
         uniform sampler2D uSoilMap; uniform sampler2D uSoilNormal;
@@ -925,6 +959,12 @@ function installContourShader(material) {
         }
       `)
       .replace('#include <color_fragment>', `#include <color_fragment>
+        if (uDrapeMix > 0.0) {
+          // The imported map, painted over the model (row 0 of the texture is the north edge).
+          vec2 drapeUv = (vGroundXZ + uHalfWorld) / (2.0 * uHalfWorld);
+          vec3 paper = texture2D(uDrape, drapeUv).rgb;
+          diffuseColor.rgb = mix(diffuseColor.rgb, paper * 1.08, uDrapeMix);
+        }
         float groundRelief = 0.0;
         float texRock = 0.0;
         float texSoil = 0.0;
@@ -1284,7 +1324,10 @@ function updateTerrain() {
     skirtUniforms.uVerticalScale.value = state.exaggeration;
   }
   if (contourUniforms) {
-    contourUniforms.uContours.value = (state.topo || view3d.contours) && !state.navigating ? 1 : 0;
+    contourUniforms.uContours.value = (state.topo || view3d.contours) && !state.navigating && showOwnContours() ? 1 : 0;
+    const draped = drapeActive() && !state.navigating;
+    contourUniforms.uDrape.value = draped ? drape.texture : null;
+    contourUniforms.uDrapeMix.value = draped ? drape.opacity : 0;
     contourUniforms.uGrid.value = view3d.grid && !state.navigating ? 1 : 0;
     contourUniforms.uGridCell.value = gridCellMeters() * metersToWorld();
     contourUniforms.uHalfWorld.value = WORLD_SIZE / 2;
@@ -2126,6 +2169,105 @@ function setVerticalFrame({ datum = 0, heightMax = MAX_HEIGHT, realPlace = null 
   $('mapAttribution').hidden = !state.realPlace;
 }
 
+// ——— The imported map (map-import.js) ———
+function setDrape(canvas, { origin, extent, opacity = 1, ownContours = false, osm = false, name = '' }) {
+  drape?.texture.dispose();
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.flipY = false; // canvas row 0 is the north edge, as the shader expects
+  texture.anisotropy = Math.min(8, renderer?.capabilities.getMaxAnisotropy() || 1);
+  drape = { canvas, texture, origin: { ...origin }, extent, opacity, ownContours, osm, name };
+  updateTerrain();
+  drawMap();
+}
+
+function keepDrape() {
+  if (!drape || teamGuest) return;
+  const save = (blob) => {
+    drapeBlob = blob;
+    saveDrape({ blob, origin: drape.origin, extent: drape.extent, opacity: drape.opacity, ownContours: drape.ownContours, osm: drape.osm, name: drape.name });
+  };
+  if (drapeBlob) save(drapeBlob);
+  else drape.canvas.toBlob((blob) => blob && save(blob), 'image/jpeg', .9);
+}
+
+function removeDrape() {
+  drape?.texture.dispose();
+  drape = null;
+  drapeBlob = null;
+  clearDrape();
+  updateTerrain();
+  drawMap();
+}
+
+// The kept map comes back with the place it was made for.
+async function restoreDrape() {
+  const record = await loadDrape();
+  if (!record?.blob || record.origin?.e !== state.gridOrigin.e || record.origin?.n !== state.gridOrigin.n || record.extent !== mapExtentMeters()) return;
+  try {
+    const bitmap = await createImageBitmap(record.blob);
+    const canvas = document.createElement('canvas');
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    canvas.getContext('2d').drawImage(bitmap, 0, 0);
+    drapeBlob = record.blob;
+    setDrape(canvas, record);
+  } catch (error) { console.warn('Imported map could not be restored', error); }
+}
+
+// From the import dialog: load the real terrain round the chosen centre, then drape the map.
+function loadWithMap({ image, transform, centerE, centerN, sizeKm, name }) {
+  return new Promise((resolve) => {
+    loadRealTerrain(centerE, centerN, sizeKm, {
+      onTerrain: ({ origin, extent }) => {
+        drapeBlob = null;
+        setDrape(buildDrape(image, transform, origin, extent, drapeSize(sizeKm)), { origin, extent, name });
+        keepDrape();
+        resolve(true);
+      },
+      onFail: () => { showToast('לא הצלחנו להוריד את הגבהים של האזור. בדקו את החיבור ונסו שוב.'); resolve(false); },
+    });
+  });
+}
+
+// For a team: the drape travels with the host's map as a smaller JPEG.
+function drapeDataUrl() {
+  if (!drapeActive()) return null;
+  const side = Math.min(2048, drape.canvas.width);
+  const small = document.createElement('canvas');
+  small.width = side;
+  small.height = side;
+  small.getContext('2d').drawImage(drape.canvas, 0, 0, side, side);
+  return { image: small.toDataURL('image/jpeg', .82), opacity: drape.opacity, ownContours: drape.ownContours, osm: drape.osm, name: drape.name };
+}
+
+async function applyDrapeData(data) {
+  if (!data?.image) { drape = null; updateTerrain(); drawMap(); return; }
+  const img = new Image();
+  img.src = data.image;
+  await img.decode();
+  const canvas = document.createElement('canvas');
+  canvas.width = img.naturalWidth;
+  canvas.height = img.naturalHeight;
+  canvas.getContext('2d').drawImage(img, 0, 0);
+  setDrape(canvas, { ...data, origin: state.gridOrigin, extent: mapExtentMeters() });
+}
+
+const mapImport = createMapImport({
+  load: loadWithMap,
+  drapeActive,
+  view: () => ({ opacity: drape?.opacity ?? 1, ownContours: Boolean(drape?.ownContours), osm: Boolean(drape?.osm), name: drape?.name || '' }),
+  setView: (patch) => {
+    if (!drape) return;
+    Object.assign(drape, patch);
+    updateTerrain();
+    drawMap();
+    keepDrape();
+  },
+  remove: removeDrape,
+});
+$('importMapBtn').addEventListener('click', () => { closePopovers(); mapImport.open(); });
+
 function resetVerticalFrame() {
   state.placeLabels = [];
   if (state.datum === 0 && state.heightMax === MAX_HEIGHT && !state.realPlace) return;
@@ -2157,7 +2299,7 @@ function realTerrainStatus(text, busy = false) {
 // Load a real place: elevations from the Terrain Tiles, roads/trails/streams/land cover from
 // OpenStreetMap. The grid's south-west corner is a round kilometre near centre − size/2, so
 // the map's grid lines carry true ITM values.
-async function loadRealTerrain(centerE, centerN, sizeKm) {
+async function loadRealTerrain(centerE, centerN, sizeKm, { onTerrain = null, onFail = null } = {}) {
   if (!isItm(centerE, centerN)) {
     realTerrainStatus('הנ״צ מחוץ לרשת ישראל: מזרח 100000–300000, צפון 350000–820000.');
     return;
@@ -2182,6 +2324,7 @@ async function loadRealTerrain(centerE, centerN, sizeKm) {
     abort.abort();
     if (realTerrainAbort === abort) realTerrainAbort = null;
     realTerrainStatus('לא הצלחנו להוריד את נתוני הגובה. בדקו את החיבור לאינטרנט ונסו שוב.');
+    onFail?.();
     return;
   }
   if (abort.signal.aborted) return;
@@ -2195,6 +2338,7 @@ async function loadRealTerrain(centerE, centerN, sizeKm) {
   setGridOrigin(origin, false);
   mapFeatures?.load([]);
   state.placeLabels = [];
+  onTerrain?.({ origin, extent });
   state.course = emptyCourse();
   state.waypoints = [];
   updateCourseUI();
@@ -2630,6 +2774,7 @@ function exitGameMode() {
   if (groundMesh) groundMesh.visible = false;
   exitObserver();
   applyView3d();
+  updateTerrain();
   requestAnimationFrame(() => { resizeThree(); resizeMap(); });
 }
 
@@ -3534,7 +3679,11 @@ navGame = createNavGame({
 // ——— Team navigation (multiplayer.js): the room dialog and the hand-off to the field ———
 let teamGuest = false; // a guest's autosave is paused while they play on the host's map
 const teamSession = createTeam({
-  getProject: () => serializeProject({ ...collectProjectData(), mapSize: state.mapSize }),
+  getProject: () => {
+    const text = serializeProject({ ...collectProjectData(), mapSize: state.mapSize });
+    const extra = drapeDataUrl();
+    return extra ? JSON.stringify({ ...JSON.parse(text), drape: extra }) : text;
+  },
   coursePoints: () => coursePoints(state.course).map(({ u, v, kind, number }) => ({ u, v, kind, number })),
   extent: mapExtentMeters,
   // A reason the course cannot be sent, or '' when it can.
@@ -3544,12 +3693,19 @@ const teamSession = createTeam({
     return '';
   },
   applyProject: (text) => {
-    try { return restoreProject(parseProject(text)); } catch (error) { console.warn('Team map failed', error); return false; }
+    try {
+      const project = parseProject(text);
+      const ok = restoreProject(project);
+      if (ok) applyDrapeData(project.drape).catch((error) => console.warn('Team drape failed', error));
+      return ok;
+    } catch (error) { console.warn('Team map failed', error); return false; }
   },
   lock: (on) => { teamGuest = on; if (on) autosave?.flush(); },
   restoreLocal: () => {
     const saved = loadProject();
     if (!saved || !restoreProject(saved)) resetMap({ terrain: true, features: true, course: true });
+    drape = null;
+    restoreDrape().finally(() => { updateTerrain(); drawMap(); });
     history.clear();
   },
   openSetup: (info) => {
@@ -3774,6 +3930,7 @@ syncDetailControls(); // brush limits must match the map before saved settings a
 const launchParams = new URLSearchParams(location.search);
 const savedProject = launchParams.has('fresh') ? null : loadProject();
 const restored = savedProject ? restoreProject(savedProject) : false;
+if (restored) restoreDrape();
 autosave = createAutosave(collectProject, { onSaved: flashSaved });
 if (restored) {
   showToast('העבודה הקודמת שוחזרה.', { action: { label: 'התחלה חדשה', run: startFresh } });
