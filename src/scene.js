@@ -14,6 +14,8 @@ import { initShortcuts, SHORTCUTS, HOLD_HINTS, shortcutLabel } from './shortcuts
 import { emptyCourse, sanitizeCourse, isRunnable, generateCourse, courseLength, drawCourse, coursePoints, cloneCourse } from './course.js';
 import { createNavGame } from './nav-game.js';
 import { DEFAULT_ORIGIN, sanitizeOrigin, readCoordinate, formatCoordinate } from './grid-coords.js';
+import { fetchHeights, fetchOsm, osmToFeatures, chooseDatum } from './real-terrain.js';
+import { isItm } from './itm.js';
 import * as THREE from 'three';
 import { createFieldEngine } from './field-engine.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
@@ -47,6 +49,12 @@ const state = {
   flattenTarget: 0,       // height (m) the flatten tool levels to, set when a stroke starts
   course: emptyCourse(),  // orienteering course (course.js)
   gridOrigin: { ...DEFAULT_ORIGIN }, // easting/northing of the map's south-west corner
+  // Vertical frame. Heights are stored relative to `datum` (m above sea level of height 0) and
+  // may rise to `heightMax`; drawn terrain keeps 0 / 200. A real place (real-terrain.js) sets a
+  // round-hundred datum under its lowest point and room for its whole relief.
+  datum: 0,
+  heightMax: 200,
+  realPlace: null,        // { e, n, sizeKm } when the terrain was loaded from real elevations
   waypoints: [],          // נ״צ markers: [{ u, v }]
   coursePlace: 'control', // what a click places with the course tool: 'start' | 'control' | 'finish'
   navigating: false,      // the navigation game owns the screen (nav-game.js)
@@ -106,7 +114,13 @@ const colorStops = [
 function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 function lerp(a, b, t) { return a + (b - a) * t; }
 
+// Above-sea-level height as shown to the user.
+const displayHeight = (h) => h + state.datum;
+const heightCeiling = () => Math.max(MAX_HEIGHT, state.heightMax);
+
 function heightColor(h, editing = false) {
+  // Tall real relief is spread over the same colour ramp.
+  if (h > 0 && state.heightMax > MAX_HEIGHT) h *= MAX_HEIGHT / state.heightMax;
   let i = 0;
   while (i < colorStops.length - 2 && h > colorStops[i + 1][0]) i++;
   const [h0, c0] = colorStops[i];
@@ -129,7 +143,7 @@ function contourLevels() {
   const levels = [];
   const start = Math.ceil(min / state.interval) * state.interval;
   for (let v = start; v <= max; v += state.interval) {
-    if (v >= MIN_HEIGHT && v <= MAX_HEIGHT) levels.push(v);
+    if (v >= MIN_HEIGHT && v <= heightCeiling()) levels.push(v);
   }
   return levels;
 }
@@ -246,7 +260,7 @@ function drawContours(ctx, w, h, dpr) {
     const major = shape.value % 100 === 0;
     ctx.strokeStyle = major ? 'rgba(116,76,43,.9)' : 'rgba(143,101,65,.64)';
     ctx.lineWidth = (major ? 1.65 : 0.85) / Math.max(sx, sy) * dpr;
-    ctx.setLineDash(shape.value < 0 ? [4 / sx * dpr, 3 / sx * dpr] : []);
+    ctx.setLineDash(displayHeight(shape.value) < 0 ? [4 / sx * dpr, 3 / sx * dpr] : []);
     for (const polygon of shape.coordinates) {
       tracePolygon(ctx, polygon);
       ctx.stroke();
@@ -266,7 +280,7 @@ function drawContours(ctx, w, h, dpr) {
     const p = ring[Math.floor(ring.length * 0.43)];
     const x = p[0] * sx;
     const y = p[1] * sy;
-    const text = `${shape.value} מ׳`;
+    const text = `${displayHeight(shape.value)} מ׳`;
     const width = ctx.measureText(text).width + 8 * dpr;
     if (x - width / 2 < 0 || x + width / 2 > w || y < 10 * dpr || y > h - 10 * dpr) continue; // never clip a label at the edge
     ctx.fillStyle = 'rgba(248,246,229,.9)';
@@ -651,13 +665,14 @@ function drawMap() {
   if (!mapCanvas.width || !mapCanvas.height) return;
   mapCtx.clearRect(0, 0, mapCanvas.width, mapCanvas.height);
   drawRaster();
+  mapFeatures?.draw2D(mapCtx, mapCanvas, mapDpr, false, { lines: false }); // land cover under the contours
   if (state.topo) {
     drawGridLines(mapCtx, mapCanvas.width, mapCanvas.height, mapDpr);
     drawContours(mapCtx, mapCanvas.width, mapCanvas.height, mapDpr);
     drawGridLabels(mapCtx, mapCanvas.width, mapCanvas.height, mapDpr);
   }
   rainSimulation?.draw2D(mapCtx, mapCanvas, mapDpr);
-  mapFeatures?.draw2D(mapCtx, mapCanvas, mapDpr);
+  mapFeatures?.draw2D(mapCtx, mapCanvas, mapDpr, true, { areas: false });
   if (state.course.start) {
     mapCtx.save();
     if (state.tool !== 'course') mapCtx.globalAlpha = .55;
@@ -708,9 +723,10 @@ function drawPrintBlock(ctx, w, h, dpr, options = {}) {
     ctx.strokeRect(1 * dpr, 1 * dpr, w - 2 * dpr, h - 2 * dpr);
     ctx.restore();
   }
+  if (options.showFeatures !== false) mapFeatures?.draw2D(ctx, { width: w, height: h }, dpr, false, { lines: false });
   drawContours(ctx, w, h, dpr);
   if (options.showCoordinates !== false) drawGridLabels(ctx, w, h, dpr);
-  if (options.showFeatures !== false) mapFeatures?.draw2D(ctx, { width: w, height: h }, dpr, false);
+  if (options.showFeatures !== false) mapFeatures?.draw2D(ctx, { width: w, height: h }, dpr, false, { areas: false });
   if (options.showFeatures !== false) drawWaypoints(ctx, w, h, dpr);
 }
 
@@ -1667,7 +1683,7 @@ function syncDetailControls() {
 // ——— Shared state updates ———
 function updateReadouts() {
   const { max } = terrainStats();
-  $('maxHeight').textContent = `שיא ${Math.round(max)} מ׳`;
+  $('maxHeight').textContent = `שיא ${Math.round(displayHeight(max))} מ׳`;
   if (state.exercise) {
     const lines = countPositiveContourLevels();
     const complete = (max >= 60 ? 1 : 0) + (lines >= 3 ? 1 : 0);
@@ -1699,6 +1715,8 @@ function currentSnapshot() {
     heights,
     mapSize: state.mapSize,
     localSpacing: state.localSpacing,
+    vertical: { datum: state.datum, heightMax: state.heightMax, realPlace: state.realPlace },
+    gridOrigin: { ...state.gridOrigin },
     features: mapFeatures?.serialize() || [],
     course: cloneCourse(state.course),
     waypoints: state.waypoints.map((p) => ({ ...p })),
@@ -1709,8 +1727,10 @@ function restoreSnapshot(snapshot) {
   rainSimulation?.stop();
   stopDrawing();
   const spacing = snapshot.localSpacing ?? state.localSpacing;
+  if (snapshot.vertical) setVerticalFrame(snapshot.vertical); // before anything reads heights
   if (snapshot.mapSize !== state.mapSize || spacing !== state.localSpacing) setMapSize(snapshot.mapSize, snapshot.heights, spacing);
   else heights.set(snapshot.heights);
+  if (snapshot.gridOrigin && (snapshot.gridOrigin.e !== state.gridOrigin.e || snapshot.gridOrigin.n !== state.gridOrigin.n)) setGridOrigin(snapshot.gridOrigin, false);
   // Features and course are restored after any resize so they land exactly where they were.
   if (snapshot.features && mapFeatures && JSON.stringify(snapshot.features) !== JSON.stringify(mapFeatures.serialize())) {
     mapFeatures.load(snapshot.features);
@@ -1838,6 +1858,7 @@ function setTopo(enabled) {
 function clearHeights(record = true) {
   rainSimulation?.stop();
   if (record) pushUndo();
+  resetVerticalFrame();
   heights.fill(0);
   state.pointer = null;
   hideCursorReadout();
@@ -1847,6 +1868,7 @@ function clearHeights(record = true) {
 function applyPreset(name) {
   rainSimulation?.stop();
   pushUndo();
+  resetVerticalFrame();
   for (let y = 0; y < N; y++) {
     for (let x = 0; x < N; x++) {
       const nx = (x / (N - 1) - .5) * 2;
@@ -1878,6 +1900,7 @@ function applyRandomTerrain(newSeed = false) {
     options[name] = Number($('terrain-' + name).value);
   }
   pushUndo();
+  resetVerticalFrame();
   heights.set(generateTerrain(N, options));
   // Let water shape the noise: open channels, branching valleys, only deep lakes remain.
   options.drainage = Number($('terrain-drainage').value);
@@ -1902,7 +1925,7 @@ function applyBrush(gx, gy, seconds, tool = state.tool) {
     applyFlattenBrush(heights, N, gx, gy, radius, state.flattenTarget, state.strength * seconds * .15);
   } else {
     const sign = tool === 'lower' ? -1 : 1;
-    applyHeightBrush(heights, N, gx, gy, radius, sign * state.strength * seconds, MIN_HEIGHT, MAX_HEIGHT);
+    applyHeightBrush(heights, N, gx, gy, radius, sign * state.strength * seconds, MIN_HEIGHT, heightCeiling());
   }
   scheduleUpdate();
 }
@@ -1978,7 +2001,7 @@ function updateWaypointUI(pointer = null) {
   const live = $('waypointLive');
   if (pointer) {
     const point = { u: pointer.gx / (N - 1), v: pointer.gy / (N - 1) };
-    live.textContent = `${waypointText(point)} · ${Math.round(sampleHeight(point.u, point.v))} מ׳`;
+    live.textContent = `${waypointText(point)} · ${Math.round(displayHeight(sampleHeight(point.u, point.v)))} מ׳`;
   } else if (state.waypoints.length) {
     const last = state.waypoints[state.waypoints.length - 1];
     live.textContent = `${state.waypoints.length}: ${waypointText(last)}`;
@@ -1995,7 +2018,7 @@ function addWaypoint(next) {
   updateWaypointUI();
   drawMap();
   scheduleSave();
-  showToast(`נקודה ${state.waypoints.length}: נ״צ ${waypointText(point)} (צפון/מזרח) · גובה ${Math.round(sampleHeight(point.u, point.v))} מ׳`);
+  showToast(`נקודה ${state.waypoints.length}: נ״צ ${waypointText(point)} (צפון/מזרח) · גובה ${Math.round(displayHeight(sampleHeight(point.u, point.v)))} מ׳`);
 }
 
 function removeLastWaypoint() {
@@ -2031,6 +2054,111 @@ function setGridOrigin(origin, message = true) {
   scheduleSave();
   if (message) showToast(`רשת הקואורדינטות מתחילה עכשיו ב־${state.gridOrigin.n}/${state.gridOrigin.e} (צפון/מזרח) בפינה הדרומית־מערבית.`);
 }
+
+// ——— Vertical frame and real places (real-terrain.js) ———
+function setVerticalFrame({ datum = 0, heightMax = MAX_HEIGHT, realPlace = null } = {}) {
+  state.datum = Number.isFinite(datum) ? Math.round(datum) : 0;
+  state.heightMax = Number.isFinite(heightMax) ? clamp(heightMax, MAX_HEIGHT, 4000) : MAX_HEIGHT;
+  state.realPlace = realPlace && isItm(realPlace.e, realPlace.n) ? { e: realPlace.e, n: realPlace.n, sizeKm: realPlace.sizeKm } : null;
+  $('mapAttribution').hidden = !state.realPlace;
+}
+
+function resetVerticalFrame() {
+  if (state.datum === 0 && state.heightMax === MAX_HEIGHT && !state.realPlace) return;
+  setVerticalFrame();
+}
+
+const REAL_PLACES = {
+  tabor: { e: 236900, n: 732500, size: 4 },
+  meron: { e: 238700, n: 767000, size: 6 },
+  jerusalem: { e: 222300, n: 631600, size: 4 },
+  ramon: { e: 180700, n: 500600, size: 8 },
+};
+let realTerrainAbort = null;
+
+function realTerrainStatus(text, busy = false) {
+  const status = $('realTerrainStatus');
+  status.textContent = text;
+  status.classList.toggle('busy', busy);
+  $('realTerrainBtn').disabled = busy;
+}
+
+// Load a real place: elevations from the Terrain Tiles, roads/trails/streams/land cover from
+// OpenStreetMap. The grid's south-west corner is a round kilometre near centre − size/2, so
+// the map's grid lines carry true ITM values.
+async function loadRealTerrain(centerE, centerN, sizeKm) {
+  if (!isItm(centerE, centerN)) {
+    realTerrainStatus('הנ״צ מחוץ לרשת ישראל: מזרח 100000–300000, צפון 350000–820000.');
+    return;
+  }
+  stopDrawing();
+  rainSimulation?.stop();
+  realTerrainAbort?.abort();
+  const abort = new AbortController();
+  realTerrainAbort = abort;
+  const extent = sizeKm * 1000;
+  const origin = { e: Math.round((centerE - extent / 2) / 1000) * 1000, n: Math.round((centerN - extent / 2) / 1000) * 1000 };
+  const n = gridResolution(sizeKm, state.localSpacing);
+  realTerrainStatus('מוריד גבהים…', true);
+  let raw;
+  let elements = null;
+  try {
+    const osm = fetchOsm({ origin, extent, signal: abort.signal }).catch((error) => { console.warn('OSM unavailable', error); return null; });
+    raw = await fetchHeights({ origin, extent, n, signal: abort.signal, onProgress: (done, total) => realTerrainStatus(`מוריד גבהים… ${done}/${total}`, true) });
+    realTerrainStatus('מוריד דרכים, שבילים ונחלים מ־OpenStreetMap…', true);
+    elements = await osm;
+  } catch (error) {
+    if (abort.signal.aborted) return;
+    console.warn('Real terrain failed', error);
+    realTerrainStatus('לא הצלחנו להוריד את נתוני הגובה. בדקו את החיבור לאינטרנט ונסו שוב.');
+    return;
+  } finally {
+    if (realTerrainAbort === abort) realTerrainAbort = null;
+  }
+  if (abort.signal.aborted) return;
+  pushUndo();
+  const datum = chooseDatum(raw);
+  let relief = 0;
+  for (let i = 0; i < raw.length; i++) { raw[i] -= datum; relief = Math.max(relief, raw[i]); }
+  setVerticalFrame({ datum, heightMax: Math.max(MAX_HEIGHT, Math.ceil((relief + 60) / 50) * 50), realPlace: { e: centerE, n: centerN, sizeKm } });
+  setMapSize(sizeKm, raw, state.localSpacing);
+  setGridOrigin(origin, false);
+  const features = elements ? osmToFeatures(elements, { origin, extent, cell: 1 / (N - 1) }) : [];
+  // OSM streams are not always drawn downstream: start each one at its higher end.
+  for (const f of features) {
+    if (!/Stream$/.test(f.type)) continue;
+    const a = f.points[0];
+    const b = f.points[f.points.length - 1];
+    if (sampleHeight(a.u, a.v) < sampleHeight(b.u, b.v)) f.points.reverse();
+  }
+  mapFeatures?.load(features);
+  state.course = emptyCourse();
+  state.waypoints = [];
+  updateCourseUI();
+  updateWaypointUI();
+  // Contour interval by relief, as on printed maps of hilly ground.
+  const interval = relief > 400 ? 20 : relief > 120 ? 10 : 5;
+  state.interval = interval;
+  $('intervalSelect').value = String(interval);
+  setTopo(true);
+  scheduleUpdate();
+  scheduleSave();
+  const lowest = datum + Math.round(Math.min(...raw));
+  const highest = datum + Math.round(relief);
+  realTerrainStatus(`נטען: ${sizeKm}×${sizeKm} ק״מ, פינה דרום־מערבית ${origin.n}/${origin.e}. גובה ${lowest}–${highest} מ׳${elements ? `, ${features.length} פריטי תכסית` : ' (התכסית לא נטענה)'}.`);
+  closePopovers();
+  showToast(`שטח אמיתי נטען: גובה ${lowest}–${highest} מ׳${elements ? '' : '. דרכים ושבילים לא נטענו (OpenStreetMap לא זמין כרגע)'}.`, { action: { label: 'ביטול', run: undo } });
+}
+
+$('realTerrainBtn').addEventListener('click', () => loadRealTerrain(Number($('realE').value), Number($('realN').value), Number($('realSize').value)));
+for (const id of ['realE', 'realN']) $(id).addEventListener('keydown', (event) => { if (event.key === 'Enter') $('realTerrainBtn').click(); });
+document.querySelectorAll('[data-real-place]').forEach((button) => button.addEventListener('click', () => {
+  const place = REAL_PLACES[button.dataset.realPlace];
+  $('realE').value = String(place.e);
+  $('realN').value = String(place.n);
+  $('realSize').value = String(place.size);
+  loadRealTerrain(place.e, place.n, place.size);
+}));
 
 // ——— Orienteering course planning (course tool) ———
 // Click places the selected kind of point; dragging an existing point moves it.
@@ -2353,7 +2481,7 @@ function hideCursorReadout() {
 function updatePointReadout(pointer, event = null) {
   const x = Math.round(pointer.gx);
   const y = Math.round(pointer.gy);
-  const height = Math.round(heights[y * N + x]);
+  const height = Math.round(displayHeight(heights[y * N + x]));
   const slope = slopePercent(heights, N, pointer.gx, pointer.gy, mapExtentMeters() / (N - 1));
   cursorReadout.textContent = `${height} מ׳ · שיפוע ${slope < 1 ? slope.toFixed(1) : Math.round(slope)}%`;
   const wrapRect = $('mapWrap').getBoundingClientRect();
@@ -2752,7 +2880,8 @@ function updateExercise() {
 
 function startExercise() {
   if (state.exercise) return;
-  state.exerciseBackup = { heights: new Float32Array(heights), mapSize: state.mapSize, localSpacing: state.localSpacing, topo: state.topo };
+  state.exerciseBackup = { heights: new Float32Array(heights), mapSize: state.mapSize, localSpacing: state.localSpacing, topo: state.topo, vertical: { datum: state.datum, heightMax: state.heightMax, realPlace: state.realPlace } };
+  resetVerticalFrame();
   rainSimulation?.stop();
   state.exercise = true;
   $('checkExerciseBtn').textContent = 'בדיקה';
@@ -2773,6 +2902,7 @@ function closeExercise() {
   state.exerciseBackup = null;
   if (backup.mapSize !== state.mapSize || backup.localSpacing !== state.localSpacing) setMapSize(backup.mapSize, backup.heights, backup.localSpacing);
   else heights.set(backup.heights);
+  setVerticalFrame(backup.vertical);
   $('exerciseStrip').hidden = true;
   $('exerciseBtn').classList.remove('active');
   history.clear();
@@ -2956,10 +3086,10 @@ const pdfPreview = createPdfPreviewController({
       sizeKm: state.mapSize,
       interval: state.interval,
       scale: state.scale,
-      stats: terrainStats(),
-      colorStops,
-      colorMin: MIN_HEIGHT,
-      colorMax: MAX_HEIGHT,
+      stats: (({ min, max }) => ({ min: displayHeight(min), max: displayHeight(max) }))(terrainStats()),
+      colorStops: colorStops.map(([v, c]) => [displayHeight(v > 0 && state.heightMax > MAX_HEIGHT ? v * state.heightMax / MAX_HEIGHT : v), c]),
+      colorMin: displayHeight(MIN_HEIGHT),
+      colorMax: displayHeight(heightCeiling()),
       mapBlock: drawPrintBlock,
       exaggeration: state.exaggeration,
   }),
@@ -2988,7 +3118,7 @@ $('erodeBtn').addEventListener('click', () => {
   erosionPresses = (erosionPresses + 1) % 1e6;
   erodeStreamPower(heights, N, { passes: 12, strength: 2.6, m: .6, diffusion: .04, roughness: 2.5, seed: erosionPresses });
   breachDepressions(heights, N, { keepDepth: 6, keepCells: Math.round(N * .3) });
-  for (let i = 0; i < heights.length; i++) heights[i] = clamp(heights[i], MIN_HEIGHT, MAX_HEIGHT);
+  for (let i = 0; i < heights.length; i++) heights[i] = clamp(heights[i], MIN_HEIGHT, heightCeiling());
   scheduleUpdate();
   closePopovers();
   showToast('המים חרצו ערוצים בשטח. אפשר ללחוץ שוב להעמקה, או להפעיל גשם ולראות את הזרימה.', { action: { label: 'ביטול', run: undo } });
@@ -3178,10 +3308,10 @@ $('undoCourseBtn').addEventListener('click', removeLastCoursePoint);
 $('undoWaypointBtn').addEventListener('click', removeLastWaypoint);
 $('clearWaypointsBtn').addEventListener('click', clearWaypoints);
 syncGridOriginInputs();
-const applyGridOriginInputs = () => setGridOrigin({ e: Number($('gridOriginE').value), n: Number($('gridOriginN').value) });
+const applyGridOriginInputs = () => { pushUndo(); setGridOrigin({ e: Number($('gridOriginE').value), n: Number($('gridOriginN').value) }); };
 $('gridOriginApply').addEventListener('click', applyGridOriginInputs);
 for (const id of ['gridOriginE', 'gridOriginN']) $(id).addEventListener('keydown', (event) => { if (event.key === 'Enter') applyGridOriginInputs(); });
-$('gridOriginReset').addEventListener('click', () => setGridOrigin(DEFAULT_ORIGIN));
+$('gridOriginReset').addEventListener('click', () => { pushUndo(); setGridOrigin(DEFAULT_ORIGIN); });
 $('clearCourseBtn').addEventListener('click', () => setCourse(emptyCourse(), 'המסלול נמחק.'));
 $('startNavBtn').addEventListener('click', openNavigation);
 $('navBtn').addEventListener('click', openNavigation);
@@ -3317,6 +3447,9 @@ function collectProject() {
       scale: state.scale,
       exaggeration: state.exaggeration,
       gridOrigin: { ...state.gridOrigin },
+      datum: state.datum,
+      heightMax: state.heightMax,
+      realPlace: state.realPlace,
     },
     features: mapFeatures?.serialize() || [],
     course: cloneCourse(state.course),
@@ -3337,6 +3470,7 @@ function restoreProject(saved) {
   const settings = saved.settings || {};
   const spacing = [5, 10].includes(settings.localSpacing) ? settings.localSpacing : state.localSpacing;
   if (gridResolution(saved.mapSize, spacing) ** 2 !== saved.heights.length) return false;
+  setVerticalFrame(settings);
   if (saved.mapSize !== state.mapSize || spacing !== state.localSpacing) setMapSize(saved.mapSize, saved.heights, spacing);
   else heights.set(saved.heights);
   // Older saves stored the brush as a percentage (`brush`); only metre values are restored.
@@ -3408,7 +3542,7 @@ function resetMap({ terrain = false, features = false, course = false }) {
   rainSimulation?.stop();
   mapFeatures?.cancel(false);
   pushUndo();
-  if (terrain) heights.fill(0);
+  if (terrain) { heights.fill(0); resetVerticalFrame(); }
   if (features) mapFeatures?.clearAll();
   if (course) { state.course = emptyCourse(); updateCourseUI(); }
   if (all) state.waypoints = [];

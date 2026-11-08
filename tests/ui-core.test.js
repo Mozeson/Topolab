@@ -104,3 +104,13 @@ test('shortcuts: no two entries claim the same key combination', () => {
     }
   }
 });
+
+test('tall real relief is stored in decimetres and restored', () => {
+  const heights = Float32Array.of(0, 475.37, 1890.04, -12.5);
+  const text = serializeProject({ heights, mapSize: 4 });
+  assert.equal(JSON.parse(text).heightStep, .1);
+  const saved = parseProject(text);
+  for (let i = 0; i < heights.length; i++) assert.ok(Math.abs(saved.heights[i] - heights[i]) <= .05);
+  const small = parseProject(serializeProject({ heights: Float32Array.of(1.23, -99.99), mapSize: 4 }));
+  assert.ok(Math.abs(small.heights[0] - 1.23) < 1e-6);
+});

@@ -1086,3 +1086,15 @@ body.nav-blooper .nav-camel-alert, body.nav-blooper .nav-keys, body.nav-blooper 
 .nav-loading-bar::after { content: ''; position: absolute; inset: 0; width: 40%; background: linear-gradient(90deg, transparent, rgb(255 255 255 / 35%), transparent); animation: nav-loading-shine 1.2s linear infinite; }
 @keyframes nav-loading-shine { from { transform: translateX(-100%); } to { transform: translateX(260%); } }
 .nav-loading-text { min-height: 1.5em; font-size: 17px; color: #d8e6dc; }
+
+/* Real terrain (real-terrain.js): coordinates, sample places, status; data credit on the map. */
+.real-terrain { display: grid; gap: 8px; }
+.real-terrain-fields { display: grid; grid-template-columns: 1fr 1fr auto; gap: 6px; }
+.real-terrain-fields label { display: grid; gap: 3px; color: var(--ink-soft); font-size: 11px; font-weight: 600; }
+.real-terrain-fields input, .real-terrain-fields select { width: 100%; min-width: 0; padding: 6px 7px; border: 1px solid var(--line, #cfd6cf); border-radius: 8px; font: inherit; font-size: 13px; color: inherit; background: var(--surface, #fff); direction: ltr; }
+.real-places { display: flex; flex-wrap: wrap; gap: 5px; }
+.real-places button { padding: 4px 9px; border: 1px solid var(--line, #cfd6cf); border-radius: 999px; background: transparent; color: inherit; font: inherit; font-size: 12px; cursor: pointer; }
+.real-places button:hover { background: rgba(60, 110, 80, .08); }
+#realTerrainStatus.busy::before { content: ''; display: inline-block; width: 9px; height: 9px; margin-inline-end: 6px; border: 2px solid currentColor; border-top-color: transparent; border-radius: 50%; vertical-align: -1px; animation: real-spin .8s linear infinite; }
+@keyframes real-spin { to { transform: rotate(360deg); } }
+.map-attribution { position: absolute; z-index: 2; bottom: 3px; right: 22px; max-width: 60%; color: #4e6870; font-size: 9px; line-height: 1.2; pointer-events: none; background: rgba(248, 246, 229, .75); padding: 1px 4px; border-radius: 3px; direction: ltr; }

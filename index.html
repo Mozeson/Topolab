@@ -412,6 +412,7 @@
                 <canvas id="mapCanvas" aria-label="מפת פני שטח לעריכה. גררו על המפה כדי להגביה או להנמיך." tabindex="0"></canvas>
               </div>
               <div class="map-corner map-north" aria-hidden="true"><span>צ</span><svg viewBox="0 0 24 32"><path d="m12 2 7 25-7-5-7 5 7-25Z"/></svg></div>
+              <div class="map-attribution" id="mapAttribution" hidden>גבהים: Terrain Tiles (Mapzen, AWS; SRTM) · © OpenStreetMap contributors</div>
               <div class="map-scale" aria-hidden="true"><span></span><b id="mapScaleText">1 ק״מ</b></div>
               <div class="map-mode-label" id="mapModeLabel" hidden></div>
               <div class="map-view-label" id="mapViewLabel" aria-live="polite">קנה מידה 1:25,000 · זום 100%</div>
@@ -493,6 +494,25 @@
             <button class="preset-button" type="button" data-preset="ridge"><svg viewBox="0 0 48 28" aria-hidden="true"><path d="M3 24 15 9l7 7 8-12 15 20H3Z"/></svg>רכס</button>
             <button class="preset-button" type="button" data-preset="valley"><svg viewBox="0 0 48 28" aria-hidden="true"><path d="M3 5c8 0 10 19 21 19s13-19 21-19H3Z"/></svg>עמק</button>
             <button class="preset-button" type="button" data-preset="crater"><svg viewBox="0 0 48 28" aria-hidden="true"><path d="M3 24C10 24 9 5 17 5c5 0 4 12 7 12s2-12 7-12c8 0 7 19 14 19H3Z"/></svg>מכתש</button>
+          </div>
+          <p class="popover-section-title">שטח אמיתי לפי נ״צ</p>
+          <div class="real-terrain">
+            <div class="real-terrain-fields">
+              <label for="realE">מזרח <input id="realE" type="number" min="100000" max="300000" step="100" inputmode="numeric" value="236900"></label>
+              <label for="realN">צפון <input id="realN" type="number" min="350000" max="820000" step="100" inputmode="numeric" value="732500"></label>
+              <label for="realSize">גודל <select id="realSize"><option value="1">1 ק״מ</option><option value="4" selected>4 ק״מ</option><option value="6">6 ק״מ</option><option value="8">8 ק״מ</option></select></label>
+            </div>
+            <div class="real-places" aria-label="מקומות לדוגמה">
+              <button type="button" data-real-place="tabor">הר תבור</button>
+              <button type="button" data-real-place="meron">הר מירון</button>
+              <button type="button" data-real-place="jerusalem">ירושלים</button>
+              <button type="button" data-real-place="ramon">מכתש רמון</button>
+            </div>
+            <button class="button button-primary random-quick" id="realTerrainBtn" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s-7-6.2-7-11.5A7 7 0 0 1 19 9.5C19 14.8 12 21 12 21Z"/><circle cx="12" cy="9.5" r="2.5"/></svg>
+              טעינת השטח האמיתי
+            </button>
+            <p class="popover-note" id="realTerrainStatus" role="status">נ״צ ברשת ישראל (במטרים) של מרכז המפה. נטענים גבהים אמיתיים, דרכים, שבילים, נחלים ותכסית.</p>
           </div>
           <p class="popover-section-title">מפה אקראית</p>
           <button class="button button-primary random-quick" id="randomTerrainBtn" type="button">

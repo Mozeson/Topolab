@@ -396,7 +396,9 @@ export function createMapFeatures(api) {
   api.scene()?.add(group);
 
   function validateFeature(feature) {
-    if (!isWater(feature.type) || feature.points.length < 2) return null;
+    // Imported real streams (real-terrain.js) are not graded: they disagree with the ~30 m
+    // elevation data by a cell or two, which would flag every wadi.
+    if (!isWater(feature.type) || feature.points.length < 2 || feature.imported) return null;
     const samples = samplePolyline(feature.points, 1 / Math.max(80, api.gridSize() * 1.5));
     const invalidSegments = [];
     let totalRise = 0;
@@ -601,9 +603,11 @@ export function createMapFeatures(api) {
     return true;
   }
 
-  function draw2D(ctx, canvas, dpr, includeDraft = true) {
-    for (const feature of features) if (isArea(feature.type)) drawFeature2D(ctx, canvas, dpr, feature);
-    for (const feature of features) if (!isArea(feature.type)) drawFeature2D(ctx, canvas, dpr, feature);
+  // `layers` lets the editor put the land cover under its contour lines and the lines above
+  // them, as on a printed map.
+  function draw2D(ctx, canvas, dpr, includeDraft = true, { areas = true, lines = true } = {}) {
+    if (areas) for (const feature of features) if (isArea(feature.type)) drawFeature2D(ctx, canvas, dpr, feature);
+    if (lines) for (const feature of features) if (!isArea(feature.type)) drawFeature2D(ctx, canvas, dpr, feature);
     if (!includeDraft || !draft) return;
     drawFeature2D(ctx, canvas, dpr, draft, hoverPoint);
     ctx.save();
@@ -639,14 +643,14 @@ export function createMapFeatures(api) {
   }
 
   function serialize() {
-    return features.map(({ type, color, points }) => ({ type, color, points: points.map(({ u, v }) => ({ u, v })) }));
+    return features.map(({ type, color, points, imported }) => ({ type, color, ...(imported ? { imported: true } : {}), points: points.map(({ u, v }) => ({ u, v })) }));
   }
 
   function load(list = []) {
     features.length = 0;
     for (const item of list) {
       if (!MAP_FEATURE_TYPES[item?.type] || !Array.isArray(item.points) || item.points.length < minPoints(item.type)) continue;
-      features.push({ id: nextId++, type: item.type, color: item.color || 'red', points: item.points.map(({ u, v }) => ({ u: clamp(u, 0, 1), v: clamp(v, 0, 1) })) });
+      features.push({ id: nextId++, type: item.type, color: item.color || 'red', imported: item.imported === true, points: item.points.map(({ u, v }) => ({ u: clamp(u, 0, 1), v: clamp(v, 0, 1) })) });
     }
     cancel(false);
     refreshValidation();
