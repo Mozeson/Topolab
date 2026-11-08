@@ -26,6 +26,10 @@
           <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="5" r="2.5"/><path d="M8 21v-5l-2-3 2-5h8l2 5-2 3v5M12 8v13"/></svg>
           <span>הצבת אדם</span>
         </button>
+        <button class="button button-quiet" id="teamBtn" type="button" title="ניווט קבוצתי: חדר עם קוד, עד 4 משתתפים">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3"/><circle cx="17" cy="9" r="2.4"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6M14.5 14.4c.8-.3 1.6-.4 2.5-.4 2.8 0 4 2 4 5"/></svg>
+          <span id="teamBtnLabel">קבוצה</span>
+        </button>
         <button class="button button-nav" id="navBtn" type="button" title="ניווט בשטח בין נקודות שקבעתם מראש">
           <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m15.5 8.5-2.2 4.8-4.8 2.2 2.2-4.8 4.8-2.2Z"/></svg>
           <span>ניווט</span>
@@ -152,6 +156,7 @@
               <div class="nav-compass-readout" id="navHeadingReadout">0°</div>
             </div>
             <div class="nav-camel-alert" id="navCamelAlert" role="status" hidden></div>
+            <div class="nav-team-chip" id="navTeamChip" role="status" hidden></div>
             <div class="nav-stats" role="status" aria-live="off">
               <div class="nav-timer" id="navTimer">00:00</div>
               <div class="nav-clock" id="navClock" hidden></div>
@@ -162,6 +167,7 @@
             </div>
             <div class="nav-actions">
               <button class="nav-icon-btn" id="navPauseBtn" type="button" aria-label="השהיה (Esc)" title="השהיה (Esc)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5v14M15 5v14"/></svg></button>
+              <button class="nav-icon-btn nav-shout-btn" id="navShoutBtn" type="button" aria-label="צעקה לקבוצה (Y)" title="צעקה לקבוצה (Y): כולם שומעים מאיפה">📣</button>
               <button class="nav-icon-btn nav-lamp-btn" id="navLampBtn" type="button" aria-pressed="false" aria-label="פנס ראש (L)" title="פנס ראש (L)" hidden>🔦</button>
               <button class="nav-icon-btn" id="navSoundBtn" type="button" aria-pressed="true" aria-label="צלילים" title="צלילים"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h4l5-4v14l-5-4H4Z"/><path class="sound-wave" d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/></svg></button>
             </div>
@@ -180,6 +186,7 @@
             <div class="nav-fade" id="navFade" aria-hidden="true"></div>
             <div class="nav-flash" id="navFlash" aria-live="assertive"></div>
             <div class="nav-countdown" id="navCountdown" hidden></div>
+            <div class="nav-team-wait" id="navTeamWait" hidden><span>👥</span><b>ממתינים לשאר הקבוצה…</b><small>כולם יוצאים יחד ברגע שכולם מוכנים</small></div>
             <div class="nav-pause" id="navPause" hidden>
               <div class="nav-pause-card">
                 <strong>הניווט מושהה</strong>
@@ -580,6 +587,55 @@
     <button class="button button-primary dialog-done" id="doneHelpBtn" type="button">הבנתי, נתחיל</button>
   </dialog>
 
+  <dialog class="team-dialog" id="teamDialog" aria-labelledby="teamTitle">
+    <div class="dialog-heading">
+      <div><span class="panel-kicker">ניווט קבוצתי</span><h2 id="teamTitle">קבוצה</h2></div>
+      <button class="icon-button" id="closeTeamBtn" type="button" aria-label="סגירה"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+    </div>
+    <section id="teamEntry">
+      <p class="team-lead">עד 4 משתתפים. המנהל בונה מפה וציר; הציר מתחלק אקראית, וכל אחד לומד ומוביל קטע של נקודה או שתיים. השאר הולכים אחריו.</p>
+      <label class="team-field" for="teamName">השם שלכם <input id="teamName" maxlength="20" autocomplete="nickname" placeholder="למשל: דנה"></label>
+      <div class="team-entry-actions">
+        <button class="button button-primary" id="teamCreateBtn" type="button">יצירת חדר חדש</button>
+        <span class="team-or">או</span>
+        <form class="team-join" id="teamJoinForm">
+          <input id="teamCode" inputmode="numeric" pattern="\d{4}" maxlength="4" placeholder="קוד חדר" aria-label="קוד חדר">
+          <button class="button" type="submit">הצטרפות</button>
+        </form>
+      </div>
+    </section>
+    <section id="teamLobby" hidden>
+      <div class="team-code"><span>קוד החדר</span><b id="teamCodeLabel">----</b><small>שתפו את הקוד עם החברים</small></div>
+      <ul class="team-roster" id="teamRoster"></ul>
+      <div class="team-host" id="teamHostPanel" hidden>
+        <p class="team-hint" id="teamCourseHint"></p>
+        <div class="nav-relief" role="radiogroup" aria-label="המפה בשטח">
+          <span>המפה בשטח</span>
+          <label><input type="radio" name="teamMapMode" value="mine" checked><b>רק הקטע שלי</b></label>
+          <label><input type="radio" name="teamMapMode" value="none"><b>בלי מפה</b><small>מהזיכרון</small></label>
+        </div>
+        <div class="nav-relief" role="radiogroup" aria-label="גמלים">
+          <span>🐪 גמלים</span>
+          <label><input type="radio" name="teamCamels" value="none" checked><b>בלי</b></label>
+          <label><input type="radio" name="teamCamels" value="few"><b>מעט</b></label>
+          <label><input type="radio" name="teamCamels" value="many"><b>הרבה</b></label>
+        </div>
+        <div class="nav-relief" role="radiogroup" aria-label="גבול גזרה">
+          <span>👻 ג״ג</span>
+          <label><input type="radio" name="teamGhosts" value="none" checked><b>בלי</b></label>
+          <label><input type="radio" name="teamGhosts" value="ghosts"><b>עם רוחות</b></label>
+        </div>
+        <div class="team-host-actions">
+          <button class="button" id="teamEditBtn" type="button">עריכת המפה והציר</button>
+          <button class="button button-go" id="teamStartBtn" type="button">שליחה וחלוקה ▶</button>
+        </div>
+      </div>
+      <p class="team-hint" id="teamGuestHint" hidden>המנהל בונה מפה וציר. ברגע שישלח, יופיע התדריך שלכם.</p>
+      <p class="team-error" id="teamError" role="alert" hidden></p>
+      <button class="button pdf-cancel-button team-leave" id="teamLeaveBtn" type="button">יציאה מהחדר</button>
+    </section>
+  </dialog>
+
   <dialog class="nav-dialog" id="navSetupDialog" aria-labelledby="navSetupTitle">
     <div class="nav-dialog-shell">
       <section class="nav-briefing" aria-label="מפת המסלול">
@@ -658,6 +714,7 @@
           <label><input type="checkbox" id="navShowDistance"> הצגת המרחק לנקודה הבאה</label>
         </details>
         <p class="nav-best" id="navBest" hidden></p>
+        <div class="nav-team-brief" id="navTeamBrief" hidden></div>
         <div class="nav-setup-actions">
           <button class="button pdf-cancel-button" id="cancelNavSetupBtn" type="button">חזרה לתכנון</button>
           <button class="button button-go" id="goNavBtn" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4v16l13-8Z"/></svg>יציאה לדרך</button>

@@ -9,7 +9,8 @@ import { createRainSimulation } from './rain.js';
 import { createPdfPreviewController } from './pdf-preview.js';
 import { createHistory } from './history.js';
 import { applyHeightBrush, applySmoothBrush, applySmudgeBrush, applyPinchBrush, applyFlattenBrush, slopePercent, SCULPT_TOOLS, SHAPE_TOOLS } from './brush.js';
-import { createAutosave, loadProject, clearProject } from './persistence.js';
+import { createAutosave, loadProject, clearProject, serializeProject, parseProject } from './persistence.js';
+import { createTeam } from './multiplayer.js';
 import { initShortcuts, SHORTCUTS, HOLD_HINTS, shortcutLabel } from './shortcuts.js';
 import { emptyCourse, sanitizeCourse, isRunnable, generateCourse, courseLength, drawCourse, coursePoints, cloneCourse } from './course.js';
 import { createNavGame } from './nav-game.js';
@@ -3530,6 +3531,43 @@ navGame = createNavGame({
   exit: exitGameMode,
 });
 
+// ——— Team navigation (multiplayer.js): the room dialog and the hand-off to the field ———
+let teamGuest = false; // a guest's autosave is paused while they play on the host's map
+const teamSession = createTeam({
+  getProject: () => serializeProject({ ...collectProjectData(), mapSize: state.mapSize }),
+  coursePoints: () => coursePoints(state.course).map(({ u, v, kind, number }) => ({ u, v, kind, number })),
+  extent: mapExtentMeters,
+  // A reason the course cannot be sent, or '' when it can.
+  courseReady: () => {
+    if (state.exercise) return 'קודם סיימו את התרגיל המודרך.';
+    if (!isRunnable(state.course)) return 'קודם בונים ציר: „עריכת המפה והציר” ← כלי המסלול (זינוק ונקודות).';
+    return '';
+  },
+  applyProject: (text) => {
+    try { return restoreProject(parseProject(text)); } catch (error) { console.warn('Team map failed', error); return false; }
+  },
+  lock: (on) => { teamGuest = on; if (on) autosave?.flush(); },
+  restoreLocal: () => {
+    const saved = loadProject();
+    if (!saved || !restoreProject(saved)) resetMap({ terrain: true, features: true, course: true });
+    history.clear();
+  },
+  openSetup: (info) => {
+    closePopovers();
+    stopDrawing();
+    navGame?.openTeam(cloneCourse(state.course), info);
+  },
+  navGame: {
+    get active() { return Boolean(navGame?.active); },
+    stop: () => navGame?.stop(),
+    teamMessage: (message) => navGame?.teamMessage(message),
+    endTeam: () => navGame?.endTeam(),
+  },
+  toast: (text) => showToast(text),
+  editCourse: () => { if (!isRunnable(state.course)) setTool('course'); },
+});
+$('teamBtn').addEventListener('click', () => teamSession.open());
+
 // ——— Keyboard shortcuts, tooltips and the shortcut list (docs/UI-GUIDE.md) ———
 const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
 const keyLabel = (label) => (isMac ? label.replace('Ctrl', '⌘') : label);
@@ -3599,7 +3637,12 @@ function scheduleSave() {
 }
 
 function collectProject() {
-  if (state.exercise) return null;
+  if (state.exercise || teamGuest) return null;
+  return collectProjectData();
+}
+
+// Everything a saved project holds (also what a team host sends to the room).
+function collectProjectData() {
   return {
     heights,
     mapSize: state.mapSize,

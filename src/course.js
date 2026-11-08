@@ -195,8 +195,11 @@ export function generateCourse({ heights, n, extentMeters, count = 5, seed = 1 }
 }
 
 // ——— Overprint drawing (start triangle, numbered circles, double-circle finish) ———
-export function drawCourse(ctx, course, { width, height, dpr = 1, nextIndex = -1, done = 0, scale = 1, color = COURSE_COLOR } = {}) {
+// `visible` (a Set of point indices) draws only part of the course, keeping its numbers:
+// team navigation shows each player just their own stretch (team.js visibleIndices).
+export function drawCourse(ctx, course, { width, height, dpr = 1, nextIndex = -1, done = 0, scale = 1, color = COURSE_COLOR, visible = null } = {}) {
   const points = coursePoints(course);
+  const shown = (i) => !visible || visible.has(i);
   if (!points.length) return;
   const size = Math.min(width, height);
   const r = clamp(size * .022, 9 * dpr, 22 * dpr) * scale;
@@ -206,6 +209,7 @@ export function drawCourse(ctx, course, { width, height, dpr = 1, nextIndex = -1
   ctx.lineJoin = 'round';
   // Legs, trimmed so they stop at the symbols' edges.
   for (let i = 1; i < points.length; i++) {
+    if (!shown(i - 1) || !shown(i)) continue;
     const a = px(points[i - 1]);
     const b = px(points[i]);
     const length = Math.hypot(b.x - a.x, b.y - a.y);
@@ -223,6 +227,7 @@ export function drawCourse(ctx, course, { width, height, dpr = 1, nextIndex = -1
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   points.forEach((point, index) => {
+    if (!shown(index)) return;
     const { x, y } = px(point);
     const isNext = index === nextIndex;
     const isDone = index < done || (point.kind === 'start' && done > 0);

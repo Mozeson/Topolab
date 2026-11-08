@@ -1140,3 +1140,50 @@ body.nav-blooper .nav-camel-alert, body.nav-blooper .nav-keys, body.nav-blooper 
 .nav-ghost-flash { position: absolute; inset: 0; pointer-events: none; opacity: 0; background: radial-gradient(circle, rgb(235 242 255 / 95%), rgb(160 185 255 / 70%) 60%, rgb(40 50 90 / 80%)); }
 .nav-ghost-flash.hit { animation: nav-ghost-hit 1.3s ease-out; }
 @keyframes nav-ghost-hit { 0% { opacity: 1; } 30% { opacity: .85; } 100% { opacity: 0; } }
+
+/* ——— Team navigation (multiplayer.js, team.js) ——— */
+.team-dialog { width: min(94vw, 520px); max-height: 92dvh; padding: 22px 24px; overflow-y: auto; color: var(--ink); background: var(--panel); border: 0; border-radius: 18px; box-shadow: 0 32px 90px rgb(13 35 28 / 38%); }
+.team-dialog::backdrop { background: rgb(10 26 21 / 55%); backdrop-filter: blur(3px); }
+.team-dialog h2 { font-size: 22px; }
+.team-dialog section { display: grid; gap: 12px; }
+.team-lead, .team-hint { margin: 0; color: var(--ink-soft); font-size: 13px; line-height: 1.55; }
+.team-field { display: grid; gap: 4px; font-size: 12px; font-weight: 600; color: var(--ink-soft); }
+.team-field input, .team-join input { padding: 9px 11px; border: 1px solid var(--line); border-radius: 10px; font: inherit; font-size: 15px; color: inherit; background: #fffef9; }
+.team-entry-actions { display: grid; gap: 8px; }
+.team-or { text-align: center; color: var(--ink-soft); font-size: 12px; }
+.team-join { display: flex; gap: 8px; }
+.team-join input { flex: 1; min-width: 0; direction: ltr; text-align: center; letter-spacing: .3em; font-weight: 700; }
+.team-code { display: grid; justify-items: center; gap: 2px; padding: 12px; border-radius: 14px; background: linear-gradient(135deg, #1d4337, #2c5a4b); color: #eaf3ec; }
+.team-code span, .team-code small { font-size: 12px; opacity: .8; }
+.team-code b { font-size: 40px; letter-spacing: .25em; direction: ltr; font-variant-numeric: tabular-nums; }
+.team-roster { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.team-roster li { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 10px; background: #fffef9; font-size: 14px; }
+.team-roster i { width: 12px; height: 12px; border-radius: 50%; background: var(--c); flex: none; }
+.team-roster small { margin-inline-start: auto; color: var(--ink-soft); font-size: 11px; }
+.team-host { display: grid; gap: 10px; padding-top: 4px; border-top: 1px solid var(--line); }
+.team-host-actions { display: flex; gap: 8px; }
+.team-host-actions .button-go { flex: 1; }
+.team-error { margin: 0; padding: 8px 10px; border-radius: 9px; background: #fbe3dc; color: #8f2c14; font-size: 13px; }
+.team-leave { justify-self: start; }
+#teamBtn.in-room { color: #fff; background: #2c5a4b; border-color: #2c5a4b; }
+/* The briefing in a team game: the team's order instead of the solo choices. */
+body.nav-team .nav-levels, body.nav-team .nav-custom, body.nav-team .nav-camels, body.nav-team .nav-ghosts,
+body.nav-team #navBest, body.nav-team .nav-setup-lead, body.nav-team #navRestartBtn, body.nav-team #navAgainBtn { display: none !important; }
+.nav-team-brief { display: grid; gap: 6px; padding: 12px 14px; border-radius: 14px; background: #eef5ef; border: 1px solid #cfe0d3; font-size: 13px; }
+.nav-team-brief[hidden] { display: none; }
+.nav-team-brief strong { font-size: 15px; }
+.nav-team-brief p { margin: 0; color: var(--ink-soft); line-height: 1.5; }
+.nav-team-order { margin: 2px 0; padding: 0; list-style: none; display: grid; gap: 4px; }
+.nav-team-order li { display: flex; align-items: center; gap: 8px; }
+.nav-team-order i { width: 10px; height: 10px; border-radius: 50%; background: var(--c); }
+.nav-team-order span { margin-inline-start: auto; font-variant-numeric: tabular-nums; color: var(--ink-soft); }
+.nav-team-chip { position: absolute; top: 96px; left: 50%; transform: translateX(-50%); padding: 7px 14px; border-radius: 14px; background: rgb(15 30 25 / 72%); color: #eef4ef; font-size: 13px; line-height: 1.6; text-align: center; pointer-events: none; backdrop-filter: blur(4px); }
+.nav-team-chip[hidden] { display: none; }
+.nav-team-chip .warn { color: #ffd27a; }
+.nav-shout-btn { display: none; font-size: 18px; }
+body.nav-team .nav-shout-btn { display: grid; }
+.nav-team-wait { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 6px; background: rgb(10 26 21 / 55%); color: #f2f6ef; text-align: center; }
+.nav-team-wait[hidden] { display: none; }
+.nav-team-wait span { font-size: 46px; }
+.nav-team-wait b { font-size: 22px; }
+@media (max-width: 640px) { .nav-team-chip { top: 76px; font-size: 12px; max-width: 92vw; } }

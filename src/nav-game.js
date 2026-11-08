@@ -18,6 +18,7 @@ import { createWind, windAt, windSpeedFactor, describeWind } from './wind.js';
 import { effortLoad, stepFatigue, breathing, runFactor } from './effort.js';
 import { pickCaveSpot } from './cave.js';
 import { createCaveMound, createCaveInterior, createSkyRoad, CAVE_LENGTH, ROAD } from './netivot.js';
+import { TEAM, visibleIndices } from './team.js';
 import { GHOST, sectorBoundary, signedDistance, spawnGhosts, stepGhost, pushInside, drawSector } from './ghosts.js';
 import { CAMEL, valleyScore, sampleGrid, spawnCamels, stepCamel, separateCamels, metersBetween, detectRadius } from './camels.js';
 import {
@@ -133,6 +134,12 @@ export function createNavGame(api) {
   let mapTimer = 0;
   let countdownTimer = null;
   let camelRng = Math.random;
+  // Team navigation (multiplayer.js, team.js): null when playing alone. Otherwise
+  // { me, players, split, options, visible: Set of point indices, send(), quit(), started }.
+  let team = null;
+  const teamPos = new Map(); // teammate id → { u, v, h, du, dv } (shown position eases to the reported one)
+  let teamSendClock = 0;
+  let shoutCool = 0;
   const lampDir = new THREE.Vector3();
   const headingTurn = new THREE.Quaternion();
   const viewDir = new THREE.Vector3();
@@ -322,7 +329,7 @@ export function createNavGame(api) {
       `שטח ${api.mapSize()}×${api.mapSize()} ק״מ`,
       `בשטח אמיתי: כ־${Math.round(naismithMinutes(length * 1.25, 0))} דק׳ הליכה`,
     ].map((t) => `<span>${t}</span>`).join('')
-      + `<div class="nav-grid-list"><strong>נ״צ הנקודות (צפון/מזרח):</strong>${points.filter((p) => p.kind === 'control').map((p) => `<span><b>${p.number}</b> ${coordOf(p)}</span>`).join('')}</div>`;
+      + `<div class="nav-grid-list"><strong>נ״צ הנקודות (צפון/מזרח):</strong>${points.filter((p, i) => p.kind === 'control' && (!team || team.visible.has(i))).map((p) => `<span><b>${p.number}</b> ${coordOf(p)}</span>`).join('')}</div>`;
     syncCustomControls();
     updateBest();
     updateMoonPreview();
@@ -335,6 +342,269 @@ export function createNavGame(api) {
   $('cancelNavSetupBtn').addEventListener('click', () => setupDialog.close());
   setupDialog.addEventListener('click', (event) => { if (event.target === setupDialog) setupDialog.close(); });
   $('goNavBtn').addEventListener('click', () => { setupDialog.close(); start(); });
+
+  // ——— Team navigation ———
+  const playerName = (id) => team?.players.find((p) => p.id === id)?.name || 'מישהו';
+  const playerColor = (id) => team?.players.find((p) => p.id === id)?.color || '#fff';
+
+  // Open the briefing for a team game: this player's stretch only, the host's options.
+  function openTeam(nextCourse, info) {
+    team = { ...info, visible: new Set(visibleIndices(info.split, info.me)), started: false };
+    teamPos.clear();
+    settings = { mapMode: info.options?.mapMode === 'none' ? 'none' : 'always', showPosition: false, showBearing: false, showDistance: false };
+    level = 'custom';
+    camelsOption = info.options?.camels in CAMEL.counts ? info.options.camels : 'none';
+    ghostsOption = info.options?.ghosts === 'ghosts' ? 'ghosts' : 'none';
+    sectorCache = { key: '', poly: null };
+    document.body.classList.add('nav-team');
+    openSetup(nextCourse);
+    renderTeamBrief();
+  }
+
+  function renderTeamBrief() {
+    const mine = team.split.blocks.find((b) => b.player === team.me);
+    const label = (i) => (points[i]?.kind === 'finish' ? 'הסיום' : `נקודה ${points[i]?.number}`);
+    const stretch = mine ? (mine.from === mine.to ? label(mine.from) : `${label(mine.from)} ו${label(mine.to)}`) : null;
+    const order = team.split.blocks.map((b) => {
+      const who = playerName(b.player);
+      const span = b.from === b.to ? (points[b.from]?.kind === 'finish' ? 'סיום' : points[b.from]?.number) : `${points[b.from]?.number}–${points[b.to]?.kind === 'finish' ? 'סיום' : points[b.to]?.number}`;
+      return `<li style="--c:${playerColor(b.player)}"><i></i><b>${who}${b.player === team.me ? ' (אתם)' : ''}</b><span>${span}</span></li>`;
+    }).join('');
+    $('navTeamBrief').innerHTML = `<strong>${stretch ? `אתם מובילים אל ${stretch}. למדו את הקטע שלכם!` : 'הפעם אתם רק הולכים אחרי הקבוצה.'}</strong>`
+      + '<p>את שאר הציר רק המובילים מכירים. הקבוצה זזה יחד: נקודה נחשבת רק כשכולם לידה.</p>'
+      + `<ol class="nav-team-order">${order}</ol>`
+      + `<p class="nav-team-map">${team.options?.mapMode === 'none' ? '🧠 בשטח אין מפה: זכרו את הקטע שלכם.' : '🗺️ בשטח תראו רק את הקטע שלכם במפה.'}</p>`;
+    $('navTeamBrief').hidden = false;
+    $('goNavBtn').lastChild.textContent = 'מוכנים ✓';
+  }
+
+  function leaveTeamUi() {
+    document.body.classList.remove('nav-team');
+    $('navTeamBrief').hidden = true;
+    $('navTeamWait').hidden = true;
+    $('navTeamChip').hidden = true;
+    $('goNavBtn').lastChild.textContent = 'יציאה לדרך';
+    for (const mate of world?.mates?.values() || []) { mate.root.visible = false; mate.label.visible = false; }
+  }
+
+  // Messages from the room (multiplayer.js passes them on).
+  function teamMessage(message) {
+    if (!team) return;
+    const now = run?.elapsed ?? 0;
+    switch (message.t) {
+      case 'start':
+        team.started = true;
+        team.leader = message.leader;
+        $('navTeamWait').hidden = true;
+        if (phase === 'waiting') beginCountdown();
+        setTimeout(() => flash(team.leader === team.me ? `👣 אתם מובילים! קדימה ל${targetName(1)}` : `👣 ${playerName(team.leader)} מוביל/ה. לכו אחריו/ה!`), 2600);
+        break;
+      case 'pos':
+        for (const p of message.list) {
+          if (p.id === team.me) continue;
+          const known = teamPos.get(p.id);
+          if (known) Object.assign(known, { u: p.u, v: p.v, h: p.h });
+          else teamPos.set(p.id, { u: p.u, v: p.v, h: p.h, du: p.u, dv: p.v, dh: p.h, bob: 0 });
+        }
+        break;
+      case 'next': teamPunch(message.next, message.leader); break;
+      case 'finish': run.teamResult = message; teamPunch(points.length, null); break;
+      case 'strays': {
+        team.strays = message.list;
+        const meLost = message.list.some((s) => s.id === team.me);
+        const key = message.list.map((s) => s.id).join(',');
+        if (key && key !== team.strayKey) {
+          if (meLost) flash('⚠️ התרחקתם מהמוביל! חזרו לקבוצה (צעקה: Y)', true);
+          else flash(`⚠️ ${message.list.map((s) => playerName(s.id)).join(', ')} התרחק/ה מהקבוצה. מצאו אותו/ה, או חכו שיחבור`, true);
+        }
+        team.strayKey = key;
+        break;
+      }
+      case 'shout': hearShout(message); break;
+      case 'penalty':
+        run && (run.teamPenalty = message.total);
+        if (message.id !== team.me) flash(`${message.reason === 'ghost' ? '👻' : '🐪'} ${playerName(message.id)} נתפס/ה: +${message.seconds} ש׳ לקבוצה`);
+        updatePeekUI();
+        break;
+      case 'left':
+        flash(`${message.name} יצא/ה מהמשחק`);
+        teamPos.delete(message.id);
+        team.players = team.players.filter((p) => p.id !== message.id);
+        break;
+      default: break;
+    }
+    void now;
+  }
+
+  const targetName = (i) => (points[i]?.kind === 'finish' ? 'סיום' : `נקודה ${points[i]?.number}`);
+
+  // The server saw the whole group at the target: count it here too, and pass the lead on.
+  function teamPunch(next, leader) {
+    if (!run) return;
+    while (run.next < next) {
+      const point = points[run.next];
+      run.splits.push({ from: run.next - 1, to: run.next, time: run.elapsed - run.legStart, walked: run.legWalked, ascent: run.legAscent });
+      run.legStart = run.elapsed;
+      run.legWalked = 0;
+      run.legAscent = 0;
+      run.next++;
+      if (point.kind === 'finish') {
+        beep([[660, .14], [880, .14], [1175, .32]]);
+        flash('🏁 כל הקבוצה בסיום!');
+        renderProgressDots();
+        finish();
+        return;
+      }
+      beep([[988, .09], [1319, .16]]);
+    }
+    renderProgressDots();
+    refreshMapCard();
+    const passed = leader !== team.leader;
+    team.leader = leader;
+    flash(`✓ כל הקבוצה בנקודה ${points[next - 1].number}${passed ? (leader === team.me ? ` · עכשיו אתם מובילים ל${targetName(next)}!` : ` · עכשיו ${playerName(leader)} מוביל/ה`) : ` · ממשיכים ל${targetName(next)}`}`);
+  }
+
+  // A teammate's call: heard from their side, quieter with distance.
+  function hearShout({ id, u, v }) {
+    const o = api.observer;
+    const extent = api.extent();
+    const d = Math.hypot(u - o.u, v - o.v) * extent;
+    const bearing = (Math.atan2(u - o.u, -(v - o.v)) * 180 / Math.PI + 360) % 360;
+    const pan = Math.sin(((bearing - o.heading) * Math.PI) / 180);
+    callSound(Math.max(.12, 1 - d / 1800), pan);
+    flash(`📣 ${playerName(id)} קורא/ת לכם מ${directionName(bearing)}, ${d < 60 ? 'ממש קרוב' : `כ־${Math.round(d / 50) * 50} מ׳`}`);
+  }
+
+  function shout() {
+    if (!team || phase !== 'running' || shoutCool > 0) return;
+    shoutCool = 3;
+    team.send({ t: 'shout' });
+    callSound(.5, 0);
+    flash('📣 צעקתם: הקבוצה שומעת מאיפה');
+  }
+  $('navShoutBtn').addEventListener('click', shout);
+
+  // "הו־הוו!": two falling calls, synthesised and panned.
+  function callSound(strength, pan) {
+    if (!soundOn) return;
+    try {
+      audio ||= new (window.AudioContext || window.webkitAudioContext)();
+      const t = audio.currentTime;
+      const out = audio.createGain();
+      out.gain.value = .22 * strength;
+      if (audio.createStereoPanner) { const p = audio.createStereoPanner(); p.pan.value = Math.max(-1, Math.min(1, pan)); out.connect(p).connect(audio.destination); } else out.connect(audio.destination);
+      [[0, 620, 520], [.42, 700, 430]].forEach(([at, f0, f1]) => {
+        const osc = audio.createOscillator();
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(f0, t + at);
+        osc.frequency.exponentialRampToValueAtTime(f1, t + at + .34);
+        const g = audio.createGain();
+        g.gain.setValueAtTime(.0001, t + at);
+        g.gain.exponentialRampToValueAtTime(1, t + at + .04);
+        g.gain.exponentialRampToValueAtTime(.0001, t + at + .36);
+        osc.connect(g).connect(out);
+        osc.start(t + at);
+        osc.stop(t + at + .4);
+      });
+    } catch { /* audio unavailable */ }
+  }
+
+  // Teammates as walkers in their colour, with their name over the head.
+  function buildMate(id) {
+    const root = new THREE.Group();
+    const color = new THREE.Color(playerColor(id));
+    const vest = new THREE.MeshStandardMaterial({ color, roughness: .7 });
+    const skin = new THREE.MeshStandardMaterial({ color: 0xd9a07a, roughness: .8 });
+    const dark = new THREE.MeshStandardMaterial({ color: 0x2c3330, roughness: .9 });
+    const body = new THREE.Mesh(new THREE.CapsuleGeometry(.24, .62, 4, 10), vest);
+    body.position.y = 1.12;
+    const legs = new THREE.Mesh(new THREE.CapsuleGeometry(.16, .62, 4, 8), dark);
+    legs.position.y = .48;
+    const head = new THREE.Mesh(new THREE.SphereGeometry(.15, 14, 10), skin);
+    head.position.y = 1.68;
+    const hat = new THREE.Mesh(new THREE.CylinderGeometry(.24, .24, .03, 16), vest);
+    hat.position.y = 1.78;
+    const pack = new THREE.Mesh(new THREE.BoxGeometry(.34, .44, .2), dark);
+    pack.position.set(0, 1.18, -.24);
+    for (const m of [body, legs, head, hat, pack]) { m.castShadow = true; root.add(m); }
+    const canvas = document.createElement('canvas');
+    canvas.width = 256;
+    canvas.height = 64;
+    const ctx = canvas.getContext('2d');
+    // A name tag: a pill in the player's colour with white text.
+    ctx.font = '700 36px Heebo, Arial, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.direction = 'rtl';
+    const tagWidth = Math.min(248, ctx.measureText(playerName(id)).width + 34);
+    ctx.fillStyle = `#${color.getHexString()}`;
+    ctx.beginPath();
+    ctx.roundRect(128 - tagWidth / 2, 6, tagWidth, 52, 26);
+    ctx.fill();
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = 'rgba(255,255,255,.85)';
+    ctx.stroke();
+    ctx.fillStyle = '#fff';
+    ctx.fillText(playerName(id), 128, 34);
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    const label = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, transparent: true, sizeAttenuation: false, depthWrite: false }));
+    // The name keeps a fixed size on screen, so it is not a child of the scaled figure.
+    label.scale.set(.36, .09, 1);
+    world.group.add(root, label);
+    return { root, label, texture, materials: [vest, skin, dark, label.material] };
+  }
+
+  function updateMates(dt) {
+    if (!team || !world) return;
+    world.mates ||= new Map();
+    const mtw = api.metersToWorld();
+    const vs = api.verticalScale();
+    const W = api.worldSize();
+    const scale = camelScale() * .8 * mtw;
+    for (const [id, p] of teamPos) {
+      let mate = world.mates.get(id);
+      if (!mate) { mate = buildMate(id); world.mates.set(id, mate); }
+      const k = Math.min(1, dt * 6);
+      const moved = Math.hypot(p.u - p.du, p.v - p.dv) * api.extent();
+      p.du += (p.u - p.du) * k;
+      p.dv += (p.v - p.dv) * k;
+      p.dh += ((((p.h - p.dh) % 360) + 540) % 360 - 180) * k;
+      p.bob += moved > .05 ? dt * 9 : 0;
+      mate.root.visible = true;
+      mate.label.visible = true;
+      mate.root.position.set((p.du - .5) * W, groundAt(p.du, p.dv) * vs + Math.abs(Math.sin(p.bob)) * .06 * scale, (p.dv - .5) * W);
+      mate.label.position.copy(mate.root.position).y += 2.35 * scale;
+      mate.root.scale.setScalar(scale);
+      mate.root.rotation.y = Math.PI - p.dh * Math.PI / 180;
+    }
+    for (const [id, mate] of world.mates) if (!teamPos.has(id)) { mate.root.visible = false; mate.label.visible = false; }
+  }
+
+  // The team line in the HUD: who leads, who is lost, who the leader is waiting for.
+  function updateTeamChip() {
+    const chip = $('navTeamChip');
+    if (!team || !run) { chip.hidden = true; return; }
+    chip.hidden = false;
+    const extent = api.extent();
+    const o = api.observer;
+    const leader = team.leader;
+    const lines = [];
+    if (leader === team.me) lines.push(`<b style="color:${playerColor(team.me)}">👣 אתם מובילים</b> · ל${targetName(run.next)}`);
+    else {
+      const lp = teamPos.get(leader);
+      const d = lp ? Math.round(Math.hypot(lp.u - o.u, lp.v - o.v) * extent) : null;
+      lines.push(`👣 מוביל/ה: <b style="color:${playerColor(leader)}">${playerName(leader)}</b>${d !== null ? ` · ${d} מ׳ מכם` : ''}`);
+    }
+    for (const s of team.strays || []) lines.push(`<span class="warn">⚠️ ${s.id === team.me ? 'אתם' : playerName(s.id)} רחוק/ה מהמוביל (${s.d} מ׳)</span>`);
+    // The leader at the target sees whom the group is waiting for.
+    const target = points[run.next];
+    if (leader === team.me && target && Math.hypot(target.u - o.u, target.v - o.v) * extent <= TEAM.groupRadius) {
+      const waiting = [...teamPos].filter(([, p]) => Math.hypot(target.u - p.u, target.v - p.v) * extent > TEAM.groupRadius).map(([id]) => playerName(id));
+      if (waiting.length) lines.push(`<span class="warn">⏳ ממתינים ל: ${waiting.join(', ')}</span>`);
+    }
+    chip.innerHTML = lines.join('<br>');
+  }
 
   // ——— Loading screen: something to read while the field is built and the GPU warms up ———
   const LOADING_FILLERS = [
@@ -392,7 +662,7 @@ export function createNavGame(api) {
     if (track?.length > 1) drawTrack(ctx, track, w, h, dpr);
     const poly = sector();
     if (poly) drawSector(ctx, poly, { width: w, height: h, dpr });
-    drawCourse(ctx, course, { width: w, height: h, dpr, done, nextIndex, scale: w > 500 * dpr ? 1.2 : 1 });
+    drawCourse(ctx, course, { width: w, height: h, dpr, done, nextIndex, scale: w > 500 * dpr ? 1.2 : 1, visible: team?.visible || null });
     drawGridRefs(ctx, w, h, dpr, done);
     drawNorthArrow(ctx, w, dpr);
     if (showYou) drawYou(ctx, w, h, dpr);
@@ -406,7 +676,7 @@ export function createNavGame(api) {
     ctx.textBaseline = 'middle';
     ctx.textAlign = 'left';
     points.forEach((point, index) => {
-      if (point.kind !== 'control') return;
+      if (point.kind !== 'control' || (team && !team.visible.has(index))) return;
       const text = coordOf(point);
       const r = Math.min(w, h) * .022;
       let x = point.u * w + r * 1.25;
@@ -1076,7 +1346,12 @@ export function createNavGame(api) {
     spawnWorldCamels();
     placeCave();
     configureNightUI();
-    Object.assign(api.observer, { u: startPoint.u, v: startPoint.v, heading: 0, tilt: -4, bob: 0 });
+    // In a team, players start side by side, a few metres apart.
+    const slot = team ? Math.max(0, team.players.findIndex((p) => p.id === team.me)) : 0;
+    const offset = (slot - (team ? (team.players.length - 1) / 2 : 0)) * 4 / api.extent();
+    Object.assign(api.observer, { u: startPoint.u + offset, v: startPoint.v, heading: 0, tilt: -4, bob: 0 });
+    run.teamPenalty = 0;
+    run.teamResult = null;
   }
 
   function configureNightUI() {
@@ -1202,6 +1477,7 @@ export function createNavGame(api) {
       o.v = back.v;
       dismissGhosts();
       flash(`👻 הרוחות תפסו אתכם! +${GHOST.penalty} ש׳, וזרקו אתכם בחזרה פנימה`, true);
+      team?.send({ t: 'penalty', seconds: GHOST.penalty, reason: 'ghost' });
       updatePeekUI();
     } else if (d > GHOST.calm && run.ghostPack.some((g) => g.fade === undefined)) {
       dismissGhosts();
@@ -1368,6 +1644,7 @@ export function createNavGame(api) {
       spit.classList.add('hit');
       run.camelFlash = now;
       flash(`🐪 הגמל השיג אתכם וירק! +${CAMEL_PENALTY} ש׳`, true);
+      team?.send({ t: 'penalty', seconds: CAMEL_PENALTY, reason: 'camel' });
       updatePeekUI();
     } else if (event === 'escaped') {
       run.camelEscapes++;
@@ -1899,6 +2176,15 @@ export function createNavGame(api) {
     }
     hud.hidden = false;
     $('navKeys').classList.remove('faded');
+    if (team && !team.started) {
+      // Everyone loads at their own speed: the server starts the group when all are ready.
+      phase = 'waiting';
+      $('navTeamWait').hidden = false;
+      const o = api.observer;
+      team.send({ t: 'ready', pos: { u: o.u, v: o.v, h: o.heading } });
+      updateTeamChip();
+      return;
+    }
     beginCountdown();
   }
 
@@ -1948,7 +2234,8 @@ export function createNavGame(api) {
   }
 
   // Seconds added to the clock: map peeks and camel catches.
-  const penaltySeconds = () => (run ? run.peeks * PEEK_PENALTY + run.camelCatches * CAMEL_PENALTY + run.ghostCatches * GHOST.penalty : 0);
+  // In a team the server adds up everyone's penalties (run.teamPenalty).
+  const penaltySeconds = () => (!run ? 0 : team ? run.teamPenalty || 0 : run.peeks * PEEK_PENALTY + run.camelCatches * CAMEL_PENALTY + run.ghostCatches * GHOST.penalty);
 
   // Phones show the map as a thumbnail that opens into a large sheet on tap.
   const compactLayout = matchMedia('(max-width: 640px), (pointer: coarse) and (max-height: 500px)');
@@ -2041,6 +2328,8 @@ export function createNavGame(api) {
 
   function stop() {
     clearTimeout(countdownTimer);
+    // Leaving the field in a team game: the room hears about it (multiplayer.js).
+    if (team) { const ended = team.ended; team = null; teamPos.clear(); leaveTeamUi(); ended?.(); }
     if (run?.drone) { Object.assign(api.observer, { flyY: undefined, roll: 0, shake: 0, fov: undefined }); api.setDrone?.(false); }
     setDroneUi(false);
     stopBuzz();
@@ -2102,6 +2391,7 @@ export function createNavGame(api) {
   }
 
   function checkControls() {
+    if (team) return; // the server counts a control when the whole group is there
     const extent = api.extent();
     const reach = reachRadiusMeters(extent);
     const o = api.observer;
@@ -2210,6 +2500,7 @@ export function createNavGame(api) {
 
   function toggleDrone() {
     if (phase !== 'running' || !run) return;
+    if (team) { flash('🚫 אין רחפן בניווט קבוצתי', true); return; }
     if (run.drone) { beginLanding(); return; }
     if (run.battery < 5) { flash('🔋 הסוללה ריקה — לכו קצת כדי לטעון אותה', true); return; }
     const o = api.observer;
@@ -2554,6 +2845,7 @@ export function createNavGame(api) {
       if (run?.fpv && event.code === 'KeyR') { event.preventDefault(); startTrick(); return; }
     }
     if (event.code === 'KeyM') { event.preventDefault(); if (!event.repeat) toggleMap(); return; }
+    if (event.code === 'KeyY' && team) { event.preventDefault(); if (!event.repeat) shout(); return; }
     if (event.code === 'KeyL' && (run?.night || run?.nearCave)) { event.preventDefault(); if (!event.repeat) setLamp(!run.lamp); return; }
     if (MOVE_KEYS.has(event.code)) { event.preventDefault(); keys.add(event.code); }
   }, true);
@@ -2684,6 +2976,11 @@ export function createNavGame(api) {
         checkControls();
         stepBody(dt, moving && !run.drone, running);
         if (world?.camels?.length) stepCamels(dt);
+        if (team) {
+          teamSendClock -= dt;
+          shoutCool -= dt;
+          if (teamSendClock <= 0) { teamSendClock = .1; team.send({ t: 'pos', u: api.observer.u, v: api.observer.v, h: Math.round(api.observer.heading) }); }
+        }
         if (world?.ghosts?.length && !run.drone && !run.blooper) stepGhosts(dt);
         if (run.night) advanceClock(dt);
         checkCave();
@@ -2700,6 +2997,7 @@ export function createNavGame(api) {
       updateNightObjects();
       updateCamelMeshes(dt);
       updateGhostMeshes(dt);
+      updateMates(dt);
       if (run) updateFieldLife(dt);
     }
     if (run) {
@@ -2721,6 +3019,7 @@ export function createNavGame(api) {
       $('navClock').textContent = `${icon} ${formatHour(run.clock)}`;
     }
     updateCamelAlert();
+    if (team) updateTeamChip();
     const pace = clamp(run.pace / 1.1, 0, 1);
     $('navPaceBar').style.width = `${Math.round(pace * 100)}%`;
     $('navPaceBar').style.background = `hsl(${Math.round(pace * 120)} 65% 58%)`;
@@ -2754,21 +3053,24 @@ export function createNavGame(api) {
     keys.clear();
     const extent = api.extent();
     const penalty = penaltySeconds();
-    const total = totalScore({ elapsed: run.elapsed + run.camelCatches * CAMEL_PENALTY + run.ghostCatches * GHOST.penalty, peeks: run.peeks, penaltyPerPeek: PEEK_PENALTY });
+    // In a team the server's clock is the team's time (from the first step to the last
+    // member at the finish), plus everyone's penalties.
+    const teamTime = team && run.teamResult ? run.teamResult : null;
+    const total = teamTime ? teamTime.total : totalScore({ elapsed: run.elapsed + run.camelCatches * CAMEL_PENALTY + run.ghostCatches * GHOST.penalty, peeks: run.peeks, penaltyPerPeek: PEEK_PENALTY });
     const straight = courseLength(course, extent);
     const efficiency = run.walked ? Math.min(1, straight / run.walked) : 1;
     const bests = readStorage(BEST_KEY, {});
     const key = bestKey();
     const previous = bests[key];
     // A run that used the drone cheat never sets a personal best.
-    const record = !run.droneUsed && (!previous || total < previous);
+    const record = !team && !run.droneUsed && (!previous || total < previous);
     if (record) { bests[key] = Math.round(total); writeStorage(BEST_KEY, bests); }
 
-    $('navResultsKicker').textContent = `רמה: ${LEVEL_NAMES[level]}`;
+    $('navResultsKicker').textContent = team ? `ניווט קבוצתי · ${team.players.map((p) => p.name).join(', ')}` : `רמה: ${LEVEL_NAMES[level]}`;
     $('navResultsTitle').textContent = efficiency > .8 ? 'ניווט מצוין!' : efficiency > .6 ? 'כל הכבוד, הגעתם!' : 'הגעתם! יש מקום לשיפור';
     $('navScore').innerHTML = `<b>${formatClock(total)}</b>`
-      + `<span>${penalty ? `${formatClock(run.elapsed)} ריצה + ${penalty} ש׳ עונש` : 'זמן כולל'}</span>`
-      + (run.droneUsed ? '<span class="nav-record nav-drone-badge">🚁 בעזרת רחפן — השיא לא נשמר</span>'
+      + `<span>${penalty ? `${formatClock(teamTime ? teamTime.elapsed : run.elapsed)} ריצה + ${penalty} ש׳ עונש` : team ? 'הזמן של הקבוצה' : 'זמן כולל'}</span>`
+      + (team ? '<span>סיבוב נוסף: המנהל בונה מסלול חדש ושולח מחלון הקבוצה</span>' : run.droneUsed ? '<span class="nav-record nav-drone-badge">🚁 בעזרת רחפן — השיא לא נשמר</span>'
         : record ? `<span class="nav-record">${previous ? 'שיא חדש!' : 'שיא ראשון!'}</span>` : `<span>השיא: ${formatClock(previous)}</span>`);
     const cells = [
       ['הלכתם', formatMeters(run.walked)],
@@ -2824,6 +3126,9 @@ export function createNavGame(api) {
 
   return {
     openSetup,
+    openTeam,
+    teamMessage,
+    endTeam() { team = null; teamPos.clear(); leaveTeamUi(); },
     frame,
     stop,
     get active() { return phase !== 'idle'; },

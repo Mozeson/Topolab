@@ -29,6 +29,9 @@ index.html ── src/style.css
            ├── cave.js             בלופר המערה: מיקום בגיא (טהור, עם בדיקה)
            ├── field-engine.js     מנוע v2 במשחק: חומרים מצולמים, שמיים אמיתיים ו-IBL, עיבוד תמונה
            ├── netivot.js          בלופר המערה: המערה, המנהרה, והכביש בשמיים עם השלט
+           ├── team.js             ניווט קבוצתי: חלוקת הציר, כולם בנקודה, מי התרחק (טהור; גם בשרת)
+           ├── multiplayer.js      חלון "קבוצה" ו־WebSocket לחדרים. docs/MULTIPLAYER.md
+           ├── ghosts.js           ג״ג: הקו סביב המסלול והרוחות (טהור, עם בדיקות)
            ├── itm.js              רשת ישראל (ITM) ↔ WGS84 (טהור, עם בדיקות)
            ├── real-terrain.js     שטח אמיתי: אריחי גובה, OSM → תכסית, דאטום. docs/REAL-TERRAIN.md
            ├── rain.js             סימולטור הגשם: נחלים, אגמים, יציאות, אנימציה (2D + 3D). docs/RAIN.md
@@ -123,3 +126,5 @@ showToast('תיאור קצר.', { action: { label: 'ביטול', run: undo } });
 - `npm test`: בדיקות `node:test` בתיקייה `tests/`. הן מכסות את המודולים הטהורים: `terrain-generator`, `terrain-grid`, `course`, `hydrology`, `history`, `brush`, `persistence`, `shortcuts`.
 - `scripts/verify-content.mjs`: בדיקה ויזואלית ב-Chrome headless (רינדור, שגיאות, צילומי מסך). הפלט נכתב ל-`verification-shots/`; צריך למחוק אותו לפני commit.
 - `window.__APP_STATS__()` חושף מצב לבדיקות אוטומטיות בדפדפן (Playwright). `?fresh` מונע טעינה של שמירה קודמת.
+
+**שרת:** `server/server.js` (Node + ws) מגיש את `dist/` ומנהל את חדרי הניווט הקבוצתי ב־`/ws`. רץ ב־Railway דרך ה־`Dockerfile`. פרטים ב־docs/MULTIPLAYER.md.
