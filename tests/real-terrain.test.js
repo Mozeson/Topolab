@@ -120,3 +120,22 @@ test('place search results become ITM points with a fitting map size', async () 
   assert.equal(suggestSize(['31.0', '31.04', '35.0', '35.04']), 6);
   assert.equal(suggestSize(['30.4', '30.7', '34.6', '35.0']), 8);
 });
+
+test('place and peak names become map labels (Hebrew first, bigger places first)', async () => {
+  const { osmToLabels, osmXmlToElements } = await import('../src/real-terrain.js');
+  const geo = (e, n) => itmToWgs84(e, n);
+  const xml = `<osm>
+    <node id="1" lat="${geo(236000, 732000).lat}" lon="${geo(236000, 732000).lon}"><tag k="place" v="village"/><tag k="name" v="Shibli"/><tag k="name:he" v="שבלי"/></node>
+    <node id="2" lat="${geo(237000, 732500).lat}" lon="${geo(237000, 732500).lon}"><tag k="natural" v="peak"/><tag k="name" v="הר תבור"/><tag k="ele" v="575"/></node>
+    <node id="3" lat="${geo(237200, 731200).lat}" lon="${geo(237200, 731200).lon}"><tag k="place" v="town"/><tag k="name" v="כפר תבור"/></node>
+    <node id="4" lat="${geo(250000, 731200).lat}" lon="${geo(250000, 731200).lon}"><tag k="place" v="city"/><tag k="name" v="far away"/></node>
+    <node id="5" lat="32.7" lon="35.4"/>
+  </osm>`;
+  const elements = osmXmlToElements(xml);
+  assert.equal(elements.filter((e) => e.type === 'node').length, 4);
+  const labels = osmToLabels(elements, { origin: TABOR, extent: 4000 });
+  assert.deepEqual(labels.map((l) => l.name), ['כפר תבור', 'שבלי', 'הר תבור']);
+  assert.equal(labels[2].kind, 'peak');
+  assert.equal(labels[2].ele, 575);
+  assert.ok(Math.abs(labels[1].u - (236000 - TABOR.e) / 4000) < 1e-3 && Math.abs(labels[1].v - (1 - (732000 - TABOR.n) / 4000)) < 1e-3);
+});

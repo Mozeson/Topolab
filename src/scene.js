@@ -14,7 +14,7 @@ import { initShortcuts, SHORTCUTS, HOLD_HINTS, shortcutLabel } from './shortcuts
 import { emptyCourse, sanitizeCourse, isRunnable, generateCourse, courseLength, drawCourse, coursePoints, cloneCourse } from './course.js';
 import { createNavGame } from './nav-game.js';
 import { DEFAULT_ORIGIN, sanitizeOrigin, readCoordinate, formatCoordinate } from './grid-coords.js';
-import { fetchHeights, fetchOsm, osmToFeatures, chooseDatum, searchPlaces } from './real-terrain.js';
+import { fetchHeights, fetchOsm, osmToFeatures, osmToLabels, chooseDatum, searchPlaces } from './real-terrain.js';
 import { isItm } from './itm.js';
 import * as THREE from 'three';
 import { createFieldEngine } from './field-engine.js';
@@ -55,6 +55,7 @@ const state = {
   datum: 0,
   heightMax: 200,
   realPlace: null,        // { e, n, sizeKm } when the terrain was loaded from real elevations
+  placeLabels: [],        // names on the map from OSM: [{ u, v, name, kind, rank, ele? }]
   waypoints: [],          // נ״צ markers: [{ u, v }]
   coursePlace: 'control', // what a click places with the course tool: 'start' | 'control' | 'finish'
   navigating: false,      // the navigation game owns the screen (nav-game.js)
@@ -679,6 +680,7 @@ function drawMap() {
     drawCourse(mapCtx, state.course, { width: mapCanvas.width, height: mapCanvas.height, dpr: mapDpr });
     mapCtx.restore();
   }
+  drawPlaceLabels(mapCtx, mapCanvas.width, mapCanvas.height, mapDpr);
   drawWaypoints(mapCtx, mapCanvas.width, mapCanvas.height, mapDpr);
   sheepGame?.draw(mapCtx, mapCanvas, mapDpr);
   drawObserver();
@@ -727,6 +729,7 @@ function drawPrintBlock(ctx, w, h, dpr, options = {}) {
   drawContours(ctx, w, h, dpr);
   if (options.showCoordinates !== false) drawGridLabels(ctx, w, h, dpr);
   if (options.showFeatures !== false) mapFeatures?.draw2D(ctx, { width: w, height: h }, dpr, false, { areas: false });
+  if (options.showFeatures !== false) drawPlaceLabels(ctx, w, h, dpr);
   if (options.showFeatures !== false) drawWaypoints(ctx, w, h, dpr);
 }
 
@@ -1716,6 +1719,7 @@ function currentSnapshot() {
     mapSize: state.mapSize,
     localSpacing: state.localSpacing,
     vertical: { datum: state.datum, heightMax: state.heightMax, realPlace: state.realPlace },
+    placeLabels: state.placeLabels,
     gridOrigin: { ...state.gridOrigin },
     features: mapFeatures?.serialize() || [],
     course: cloneCourse(state.course),
@@ -1728,6 +1732,7 @@ function restoreSnapshot(snapshot) {
   stopDrawing();
   const spacing = snapshot.localSpacing ?? state.localSpacing;
   if (snapshot.vertical) setVerticalFrame(snapshot.vertical); // before anything reads heights
+  if (snapshot.placeLabels) state.placeLabels = sanitizeLabels(snapshot.placeLabels);
   if (snapshot.mapSize !== state.mapSize || spacing !== state.localSpacing) setMapSize(snapshot.mapSize, snapshot.heights, spacing);
   else heights.set(snapshot.heights);
   if (snapshot.gridOrigin && (snapshot.gridOrigin.e !== state.gridOrigin.e || snapshot.gridOrigin.n !== state.gridOrigin.n)) setGridOrigin(snapshot.gridOrigin, false);
@@ -1959,6 +1964,63 @@ function waypointText(point) {
   return formatCoordinate(readCoordinate(point.u, point.v, mapExtentMeters(), state.gridOrigin));
 }
 
+// Place names (real-terrain.js osmToLabels), styled like a printed map: settlements in dark
+// upright type sized by importance, peaks with a triangle and height, springs in blue. Bigger
+// places go first; a name that would overlap one already drawn is left out.
+const LABEL_STYLE = {
+  city: { size: 15, weight: 800, color: '#22231f' },
+  town: { size: 13.5, weight: 800, color: '#22231f' },
+  village: { size: 12.5, weight: 700, color: '#2b2a26' },
+  quarter: { size: 10.5, weight: 600, color: '#45423b' },
+  hamlet: { size: 10.5, weight: 600, color: '#3a3832' },
+  locality: { size: 10, weight: 500, color: '#5d4b33', italic: true },
+  peak: { size: 10, weight: 600, color: '#5b3d22', mark: 'peak' },
+  spring: { size: 9.5, weight: 600, color: '#1f6e9c', mark: 'spring' },
+  cave: { size: 9.5, weight: 600, color: '#4a3a2c', mark: 'cave' },
+};
+function drawPlaceLabels(ctx, w, h, dpr) {
+  if (!state.placeLabels.length) return;
+  const placed = [];
+  const overlaps = (r) => placed.some((q) => r.x < q.x + q.w && q.x < r.x + r.w && r.y < q.y + q.h && q.y < r.y + r.h);
+  // Scale type with the drawing so the briefing/PDF block matches the editor map.
+  const k = clamp(Math.min(w, h) / (640 * dpr), .7, 1.25);
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.direction = 'rtl';
+  ctx.lineJoin = 'round';
+  for (const label of state.placeLabels) {
+    const style = LABEL_STYLE[label.kind] || LABEL_STYLE.locality;
+    const size = style.size * dpr * k;
+    const x = label.u * w;
+    const y = label.v * h;
+    const text = label.ele != null ? `${label.name} ${label.ele}` : label.name;
+    ctx.font = `${style.italic ? 'italic ' : ''}${style.weight} ${size}px Heebo, Arial, sans-serif`;
+    const width = ctx.measureText(text).width;
+    const ty = style.mark ? y - size * .95 : y;
+    const box = { x: x - width / 2 - 3 * dpr, y: ty - size * .65, w: width + 6 * dpr, h: size * 1.3 };
+    if (box.x < 2 * dpr || box.x + box.w > w - 2 * dpr || box.y < 2 * dpr || box.y + box.h > h - 2 * dpr || overlaps(box)) continue;
+    placed.push(box);
+    if (style.mark) {
+      const r = 3.6 * dpr * k;
+      ctx.beginPath();
+      if (style.mark === 'peak') { ctx.moveTo(x, y - r); ctx.lineTo(x + r, y + r * .75); ctx.lineTo(x - r, y + r * .75); ctx.closePath(); }
+      else ctx.arc(x, y, r * .8, 0, Math.PI * 2);
+      ctx.fillStyle = style.color;
+      ctx.strokeStyle = 'rgba(255,255,250,.9)';
+      ctx.lineWidth = 1.6 * dpr;
+      ctx.stroke();
+      ctx.fill();
+    }
+    ctx.strokeStyle = 'rgba(255,255,250,.88)';
+    ctx.lineWidth = 3.2 * dpr * k;
+    ctx.strokeText(text, x, ty);
+    ctx.fillStyle = style.color;
+    ctx.fillText(text, x, ty);
+  }
+  ctx.restore();
+}
+
 function drawWaypoints(ctx, w, h, dpr) {
   if (!state.waypoints.length) return;
   ctx.save();
@@ -2064,8 +2126,16 @@ function setVerticalFrame({ datum = 0, heightMax = MAX_HEIGHT, realPlace = null 
 }
 
 function resetVerticalFrame() {
+  state.placeLabels = [];
   if (state.datum === 0 && state.heightMax === MAX_HEIGHT && !state.realPlace) return;
   setVerticalFrame();
+}
+
+function sanitizeLabels(list) {
+  return (Array.isArray(list) ? list : [])
+    .filter((l) => l && typeof l.name === 'string' && l.name && Number.isFinite(l.u) && Number.isFinite(l.v) && LABEL_STYLE[l.kind])
+    .slice(0, 80)
+    .map((l) => ({ u: clamp(l.u, 0, 1), v: clamp(l.v, 0, 1), name: l.name.slice(0, 60), kind: l.kind, rank: Number(l.rank) || 0, ...(Number.isFinite(l.ele) ? { ele: l.ele } : {}) }));
 }
 
 const REAL_PLACES = {
@@ -2123,6 +2193,7 @@ async function loadRealTerrain(centerE, centerN, sizeKm) {
   setMapSize(sizeKm, raw, state.localSpacing);
   setGridOrigin(origin, false);
   mapFeatures?.load([]);
+  state.placeLabels = [];
   state.course = emptyCourse();
   state.waypoints = [];
   updateCourseUI();
@@ -2164,6 +2235,7 @@ function applyOsm(elements, { origin, extent, place, abort }) {
     if (sampleHeight(a.u, a.v) < sampleHeight(b.u, b.v)) f.points.reverse();
   }
   mapFeatures?.load([...features, ...(mapFeatures.serialize() || [])]);
+  state.placeLabels = osmToLabels(elements, { origin, extent });
   scheduleUpdate();
   scheduleSave();
   realTerrainStatus(`נטען: ${place.sizeKm}×${place.sizeKm} ק״מ, פינה דרום־מערבית ${origin.n}/${origin.e}, ${features.length} פריטי תכסית.`);
@@ -3541,6 +3613,7 @@ function collectProject() {
       datum: state.datum,
       heightMax: state.heightMax,
       realPlace: state.realPlace,
+      placeLabels: state.placeLabels,
     },
     features: mapFeatures?.serialize() || [],
     course: cloneCourse(state.course),
@@ -3562,6 +3635,7 @@ function restoreProject(saved) {
   const spacing = [5, 10].includes(settings.localSpacing) ? settings.localSpacing : state.localSpacing;
   if (gridResolution(saved.mapSize, spacing) ** 2 !== saved.heights.length) return false;
   setVerticalFrame(settings);
+  state.placeLabels = sanitizeLabels(settings.placeLabels);
   if (saved.mapSize !== state.mapSize || spacing !== state.localSpacing) setMapSize(saved.mapSize, saved.heights, spacing);
   else heights.set(saved.heights);
   // Older saves stored the brush as a percentage (`brush`); only metre values are restored.
@@ -3601,7 +3675,7 @@ function mapContents() {
     terrain: Math.max(Math.abs(min), Math.abs(max)) > .05,
     features: mapFeatures?.stats().count || 0,
     course: coursePoints(state.course).length ? state.course.controls.length + 1 : 0,
-    peak: Math.round(max),
+    peak: Math.round(displayHeight(max)),
   };
 }
 
@@ -3634,7 +3708,7 @@ function resetMap({ terrain = false, features = false, course = false }) {
   mapFeatures?.cancel(false);
   pushUndo();
   if (terrain) { heights.fill(0); resetVerticalFrame(); }
-  if (features) mapFeatures?.clearAll();
+  if (features) { mapFeatures?.clearAll(); state.placeLabels = []; }
   if (course) { state.course = emptyCourse(); updateCourseUI(); }
   if (all) state.waypoints = [];
   hideCursorReadout();

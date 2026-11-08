@@ -141,6 +141,8 @@ way[natural~"^(wood|scrub)$"](${bbox});
 relation[type=multipolygon][landuse~"^(forest|orchard|vineyard|farmland|residential|industrial|commercial)$"](${bbox});
 relation[type=multipolygon][natural=wood](${bbox});
 relation[route=hiking](${bbox});
+node[place~"^(city|town|village|hamlet|suburb|neighbourhood|isolated_dwelling|locality)$"][name](${bbox});
+node[natural~"^(peak|hill|spring|cave_entrance)$"][name](${bbox});
 );out geom qt;`;
 }
 
@@ -311,9 +313,15 @@ export function osmXmlToElements(xml) {
     return tags;
   };
   const nodes = new Map();
-  for (const m of xml.matchAll(/<node\s[^>]*?(?:\/>|>)/g)) nodes.set(attr(m[0], 'id'), { lat: Number(attr(m[0], 'lat')), lon: Number(attr(m[0], 'lon')) });
-  const ways = new Map();
   const elements = [];
+  for (const m of xml.matchAll(/<node\s([^>]*?)(?:\/>|>([\s\S]*?)<\/node>)/g)) {
+    const head = ' ' + m[1];
+    const node = { lat: Number(attr(head, 'lat')), lon: Number(attr(head, 'lon')) };
+    nodes.set(attr(head, 'id'), node);
+    // Named places and peaks become labels (osmToLabels); other tagged nodes are not needed.
+    if (m[2] && /k="(place|natural)"/.test(m[2])) elements.push({ type: 'node', id: Number(attr(head, 'id')), ...node, tags: tagsOf(m[2]) });
+  }
+  const ways = new Map();
   for (const m of xml.matchAll(/<way\s([^>]*)>([\s\S]*?)<\/way>/g)) {
     const id = Number(attr(' ' + m[1], 'id'));
     const geometry = [...m[2].matchAll(/<nd\s[^>]*ref="(\d+)"/g)].map((r) => nodes.get(r[1])).filter(Boolean);
@@ -329,6 +337,36 @@ export function osmXmlToElements(xml) {
     elements.push({ type: 'relation', id: Number(attr(' ' + m[1], 'id')), tags: tagsOf(m[2]), members });
   }
   return elements;
+}
+
+// Names on the map: settlements, quarters, named spots, peaks and springs. Hebrew name when
+// there is one. `rank` orders them (bigger places first) when labels would collide.
+const LABEL_KINDS = {
+  city: { kind: 'city', rank: 0 }, town: { kind: 'town', rank: 1 }, village: { kind: 'village', rank: 2 },
+  suburb: { kind: 'quarter', rank: 3 }, hamlet: { kind: 'hamlet', rank: 4 }, neighbourhood: { kind: 'quarter', rank: 5 },
+  isolated_dwelling: { kind: 'hamlet', rank: 6 }, locality: { kind: 'locality', rank: 7 },
+  peak: { kind: 'peak', rank: 4 }, hill: { kind: 'peak', rank: 6 }, spring: { kind: 'spring', rank: 6 }, cave_entrance: { kind: 'cave', rank: 7 },
+};
+
+export function osmToLabels(elements, { origin, extent }) {
+  const labels = [];
+  const seen = new Set();
+  for (const el of elements) {
+    if (el.type !== 'node' || !el.tags) continue;
+    const spec = LABEL_KINDS[el.tags.place] || LABEL_KINDS[el.tags.natural];
+    const name = (el.tags['name:he'] || el.tags.name || '').trim();
+    if (!spec || !name) continue;
+    const p = wgs84ToItm(el.lat, el.lon);
+    const u = (p.e - origin.e) / extent;
+    const v = 1 - (p.n - origin.n) / extent;
+    if (u < 0 || u > 1 || v < 0 || v > 1) continue;
+    const key = `${name}|${spec.kind}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const ele = spec.kind === 'peak' && Number.isFinite(Number(el.tags.ele)) ? Math.round(Number(el.tags.ele)) : null;
+    labels.push({ u, v, name, kind: spec.kind, rank: spec.rank, ...(ele !== null ? { ele } : {}) });
+  }
+  return labels.sort((a, b) => a.rank - b.rank).slice(0, 80);
 }
 
 // Overpass elements (`out geom`) → Topolab map features clipped to the map. `cell` is the
@@ -464,7 +502,7 @@ export function raceStaggered(tasks, { stagger = [], signal } = {}) {
   });
 }
 
-const CACHE_NAME = 'topolab-osm-v1';
+const CACHE_NAME = 'topolab-osm-v2'; // v2: with place and peak names
 const CACHE_DAYS = 30;
 const cacheKey = (origin, extent) => `https://topolab.local/osm?bbox=${bboxOf(origin, extent).join(',')}`;
 
