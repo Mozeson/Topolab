@@ -2100,38 +2100,29 @@ async function loadRealTerrain(centerE, centerN, sizeKm) {
   const origin = { e: Math.round((centerE - extent / 2) / 1000) * 1000, n: Math.round((centerN - extent / 2) / 1000) * 1000 };
   const n = gridResolution(sizeKm, state.localSpacing);
   realTerrainStatus('מוריד גבהים…', true);
+  // Roads and land cover start downloading now but never hold up the terrain.
+  const osm = fetchOsm({ origin, extent, signal: abort.signal }).catch((error) => (abort.signal.aborted ? 'aborted' : (console.warn('OSM unavailable', error), null)));
   let raw;
-  let elements = null;
   try {
-    const osm = fetchOsm({ origin, extent, signal: abort.signal }).catch((error) => { console.warn('OSM unavailable', error); return null; });
     raw = await fetchHeights({ origin, extent, n, signal: abort.signal, onProgress: (done, total) => realTerrainStatus(`מוריד גבהים… ${done}/${total}`, true) });
-    realTerrainStatus('מוריד דרכים, שבילים ונחלים מ־OpenStreetMap…', true);
-    elements = await osm;
   } catch (error) {
     if (abort.signal.aborted) return;
     console.warn('Real terrain failed', error);
+    abort.abort();
+    if (realTerrainAbort === abort) realTerrainAbort = null;
     realTerrainStatus('לא הצלחנו להוריד את נתוני הגובה. בדקו את החיבור לאינטרנט ונסו שוב.');
     return;
-  } finally {
-    if (realTerrainAbort === abort) realTerrainAbort = null;
   }
   if (abort.signal.aborted) return;
   pushUndo();
   const datum = chooseDatum(raw);
   let relief = 0;
   for (let i = 0; i < raw.length; i++) { raw[i] -= datum; relief = Math.max(relief, raw[i]); }
-  setVerticalFrame({ datum, heightMax: Math.max(MAX_HEIGHT, Math.ceil((relief + 60) / 50) * 50), realPlace: { e: centerE, n: centerN, sizeKm } });
+  const place = { e: centerE, n: centerN, sizeKm };
+  setVerticalFrame({ datum, heightMax: Math.max(MAX_HEIGHT, Math.ceil((relief + 60) / 50) * 50), realPlace: place });
   setMapSize(sizeKm, raw, state.localSpacing);
   setGridOrigin(origin, false);
-  const features = elements ? osmToFeatures(elements, { origin, extent, cell: 1 / (N - 1) }) : [];
-  // OSM streams are not always drawn downstream: start each one at its higher end.
-  for (const f of features) {
-    if (!/Stream$/.test(f.type)) continue;
-    const a = f.points[0];
-    const b = f.points[f.points.length - 1];
-    if (sampleHeight(a.u, a.v) < sampleHeight(b.u, b.v)) f.points.reverse();
-  }
-  mapFeatures?.load(features);
+  mapFeatures?.load([]);
   state.course = emptyCourse();
   state.waypoints = [];
   updateCourseUI();
@@ -2145,9 +2136,48 @@ async function loadRealTerrain(centerE, centerN, sizeKm) {
   scheduleSave();
   const lowest = datum + Math.round(Math.min(...raw));
   const highest = datum + Math.round(relief);
-  realTerrainStatus(`נטען: ${sizeKm}×${sizeKm} ק״מ, פינה דרום־מערבית ${origin.n}/${origin.e}. גובה ${lowest}–${highest} מ׳${elements ? `, ${features.length} פריטי תכסית` : ' (התכסית לא נטענה)'}.`);
+  realTerrainStatus(`נטען: ${sizeKm}×${sizeKm} ק״מ, פינה דרום־מערבית ${origin.n}/${origin.e}. גובה ${lowest}–${highest} מ׳. דרכים ושבילים נטענים ברקע…`);
+  $('realTerrainBtn').disabled = false;
   closePopovers();
-  showToast(`שטח אמיתי נטען: גובה ${lowest}–${highest} מ׳${elements ? '' : '. דרכים ושבילים לא נטענו (OpenStreetMap לא זמין כרגע)'}.`, { action: { label: 'ביטול', run: undo } });
+  showToast(`שטח אמיתי נטען: גובה ${lowest}–${highest} מ׳. דרכים, שבילים ותכסית נטענים ברקע…`, { action: { label: 'ביטול', run: undo } });
+  applyOsm(await osm, { origin, extent, place, abort });
+}
+
+// Add OpenStreetMap features once they arrive, if the map still shows that place. Lines the
+// user drew meanwhile stay. Part of the same undo step as the terrain.
+function applyOsm(elements, { origin, extent, place, abort }) {
+  if (realTerrainAbort === abort) realTerrainAbort = null;
+  const samePlace = state.realPlace && state.realPlace.e === place.e && state.realPlace.n === place.n && state.realPlace.sizeKm === place.sizeKm
+    && state.gridOrigin.e === origin.e && state.gridOrigin.n === origin.n;
+  if (elements === 'aborted' || abort.signal.aborted || !samePlace) return;
+  if (!elements) {
+    realTerrainStatus('השטח נטען, אבל הדרכים והשבילים לא: שרתי OpenStreetMap לא ענו.');
+    showToast('דרכים ושבילים לא נטענו: שרתי OpenStreetMap לא ענו בזמן.', { action: { label: 'נסו שוב', run: () => retryOsm(origin, extent, place) } });
+    return;
+  }
+  const features = osmToFeatures(elements, { origin, extent, cell: 1 / (N - 1) });
+  // OSM streams are not always drawn downstream: start each one at its higher end.
+  for (const f of features) {
+    if (!/Stream$/.test(f.type)) continue;
+    const a = f.points[0];
+    const b = f.points[f.points.length - 1];
+    if (sampleHeight(a.u, a.v) < sampleHeight(b.u, b.v)) f.points.reverse();
+  }
+  mapFeatures?.load([...features, ...(mapFeatures.serialize() || [])]);
+  scheduleUpdate();
+  scheduleSave();
+  realTerrainStatus(`נטען: ${place.sizeKm}×${place.sizeKm} ק״מ, פינה דרום־מערבית ${origin.n}/${origin.e}, ${features.length} פריטי תכסית.`);
+  showToast(`נוספו ${features.length} דרכים, שבילים, נחלים ושטחי תכסית מ־OpenStreetMap.`);
+}
+
+function retryOsm(origin, extent, place) {
+  realTerrainAbort?.abort();
+  const abort = new AbortController();
+  realTerrainAbort = abort;
+  showToast('מנסים שוב להוריד דרכים ושבילים…');
+  fetchOsm({ origin, extent, signal: abort.signal })
+    .catch((error) => (abort.signal.aborted ? 'aborted' : (console.warn('OSM unavailable', error), null)))
+    .then((elements) => applyOsm(elements, { origin, extent, place, abort }));
 }
 
 $('realTerrainBtn').addEventListener('click', () => loadRealTerrain(Number($('realE').value), Number($('realN').value), Number($('realSize').value)));

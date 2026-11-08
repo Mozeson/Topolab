@@ -7,7 +7,9 @@ import { itmToWgs84, wgs84ToItm } from './itm.js';
 
 export const TILE_URL = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png';
 export const OSM_API_URL = 'https://api.openstreetmap.org/api/0.6/map';
-export const OVERPASS_URLS = ['https://overpass-api.de/api/interpreter', 'https://overpass.kumi.systems/api/interpreter'];
+export const OVERPASS_URLS = ['https://overpass-api.de/api/interpreter', 'https://overpass.private.coffee/api/interpreter', 'https://overpass.kumi.systems/api/interpreter'];
+const OVERPASS_WAIT = 20000; // ms per server: public servers sometimes queue a request for minutes
+const OSM_API_WAIT = 25000;
 export const ATTRIBUTION = 'גבהים: Terrain Tiles (Mapzen, AWS Open Data; SRTM) · דרכים ותכסית: © OpenStreetMap contributors (ODbL)';
 const TILE = 256;
 const MAX_ZOOM = 14; // the source is ~30 m: finer tiles only interpolate
@@ -131,7 +133,7 @@ export function bboxOf(origin, extent) {
 export function overpassQuery(origin, extent) {
   const [w, s, e, nn] = bboxOf(origin, extent);
   const bbox = `${s},${w},${nn},${e}`;
-  return `[out:json][timeout:60];(
+  return `[out:json][timeout:25];(
 way[highway~"^(motorway|trunk|primary|secondary|tertiary|unclassified|service|track|path|footway|bridleway|steps|cycleway)(_link)?$"](${bbox});
 way[waterway~"^(river|stream|wadi)$"](${bbox});
 way[landuse~"^(forest|orchard|vineyard|farmland|meadow|residential|industrial|commercial|retail)$"](${bbox});
@@ -407,24 +409,43 @@ export async function fetchHeights({ origin, extent, n, signal, onProgress = () 
   return sampleGrid({ origin, extent, n, z, tiles });
 }
 
-export async function fetchOsm({ origin, extent, signal }) {
+// fetch() with a deadline that also follows the caller's abort signal.
+async function fetchWithin(url, options, ms, signal) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(new Error(`timeout after ${ms} ms`)), ms);
+  const follow = () => controller.abort(signal.reason);
+  signal?.addEventListener('abort', follow, { once: true });
+  try {
+    const response = await fetch(url, { ...options, signal: controller.signal });
+    if (!response.ok) throw new Error(`${new URL(url).host} ${response.status}`);
+    return options.method === 'POST' ? await response.json() : await response.text();
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener('abort', follow);
+  }
+}
+
+// Overpass servers in turn (each with a deadline), then the main OSM API. `onTry(n)` reports
+// which attempt is running so the page can say it is still working.
+export async function fetchOsm({ origin, extent, signal, onTry = () => {} }) {
   const body = 'data=' + encodeURIComponent(overpassQuery(origin, extent));
   let lastError = null;
+  let attempt = 0;
   for (const url of OVERPASS_URLS) {
+    onTry(++attempt);
     try {
-      const response = await fetch(url, { method: 'POST', body, signal, headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
-      if (!response.ok) throw new Error(`Overpass ${response.status}`);
-      return (await response.json()).elements || [];
+      const data = await fetchWithin(url, { method: 'POST', body, headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }, OVERPASS_WAIT, signal);
+      return data.elements || [];
     } catch (error) {
       if (signal?.aborted) throw error;
+      console.warn('Overpass failed', url, error);
       lastError = error;
     }
   }
   // Fallback: the main OSM API's raw map call (fine for small boxes; returns every object).
+  onTry(++attempt);
   try {
-    const response = await fetch(`${OSM_API_URL}?bbox=${bboxOf(origin, extent).join(',')}`, { signal });
-    if (!response.ok) throw new Error(`OSM API ${response.status}`);
-    return osmXmlToElements(await response.text());
+    return osmXmlToElements(await fetchWithin(`${OSM_API_URL}?bbox=${bboxOf(origin, extent).join(',')}`, {}, OSM_API_WAIT, signal));
   } catch (error) {
     if (signal?.aborted) throw error;
     throw lastError || error;
