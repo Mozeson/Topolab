@@ -2333,6 +2333,10 @@ function openNavigation() {
 // Game mode: the 3D panel fills the window, terrain shows natural colours with ground
 // texture, contours are hidden and the vertical scale is true (×1).
 let gameSaved = null;
+const LOW_PIXEL_RATIO = .7; // of a CSS pixel: a phone draws ~1/8 of the pixels it would at full quality
+const fullPixelRatio = () => Math.min(window.devicePixelRatio || 1, 2);
+let gameLow = false;
+
 function enterGameMode({ exaggeration = 1, quality = 'full', isDay = true } = {}) {
   stopDrawing();
   closePopovers();
@@ -2363,7 +2367,11 @@ function enterGameMode({ exaggeration = 1, quality = 'full', isDay = true } = {}
   }
   if (groundMesh) groundMesh.visible = true;
   setGameShadow(true);
-  fieldEngine?.enter({ isDay, quality });
+  // Low: far fewer pixels (scaled up by the browser) and no shadow map, for the weakest phones.
+  gameLow = quality === 'low';
+  if (renderer) renderer.setPixelRatio(gameLow ? LOW_PIXEL_RATIO : fullPixelRatio());
+  if (sunLight) sunLight.castShadow = !gameLow;
+  fieldEngine?.enter({ isDay, quality: gameLow ? 'light' : quality });
   // The photographed sky arrives a moment later: light the field from its sun.
   fieldEngine?.preload().then(() => { if (state.navigating && isDay && !gameFog) setGameLighting(null); });
   applyView3d();
@@ -2530,6 +2538,11 @@ function exitGameMode() {
   fieldEngine?.exit();
   setGameLighting(null);
   setGameShadow(false);
+  if (gameLow) {
+    gameLow = false;
+    if (renderer) renderer.setPixelRatio(fullPixelRatio());
+    if (sunLight) sunLight.castShadow = true;
+  }
   overlayRender = null;
   state.navigating = false;
   document.body.classList.remove('navigating');

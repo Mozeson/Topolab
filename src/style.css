@@ -1107,3 +1107,31 @@ body.nav-blooper .nav-camel-alert, body.nav-blooper .nav-keys, body.nav-blooper 
 .real-results strong { font-size: 13px; }
 .real-results small { color: var(--ink-soft); font-size: 11px; }
 .real-results-note { padding: 7px 9px; color: var(--ink-soft); font-size: 12px; }
+
+/* The briefing on phones and narrow portrait screens: one scrolling column. The map is
+   kept to about half the screen height, the difficulty cards are compact, each option row
+   puts its label on its own line with the choices sharing the width, and the "go" bar
+   stays pinned at the bottom. (Overrides the two-column grid rules above.) */
+@media (max-width: 899px), (orientation: portrait) and (max-width: 1024px) {
+  .nav-dialog { width: 100vw; height: 100dvh; max-width: 100vw; max-height: 100dvh; border-radius: 0; }
+  .nav-dialog-shell { display: block; height: 100dvh; max-height: 100dvh; overflow-y: auto; overscroll-behavior: contain; }
+  .nav-briefing { padding: 12px 12px 10px; gap: 8px; }
+  .nav-briefing canvas { width: min(100%, 48dvh); max-width: none; margin: 0 auto; }
+  .nav-briefing-meta { justify-content: center; gap: 6px; }
+  .nav-briefing-meta span { padding: 4px 8px; font-size: 11px; }
+  .nav-setup { padding: 14px 14px 0; gap: 14px; max-height: none; overflow: visible; }
+  .nav-setup .dialog-heading h2 { font-size: 20px; }
+  .nav-setup-lead { font-size: 13px; }
+  .nav-levels { grid-template-columns: 1fr 1fr; gap: 6px; }
+  .nav-level { padding: 8px 9px; gap: 1px 8px; border-radius: 12px; align-items: start; }
+  .nav-level-icon { font-size: 20px; }
+  .nav-level strong { font-size: 14px; }
+  .nav-level small { font-size: 10.5px; line-height: 1.35; }
+  .nav-relief { gap: 5px; align-items: stretch; }
+  .nav-relief > span { flex: 0 0 100%; margin: 0; font-size: 12px; }
+  .nav-relief label { flex: 1 1 0; min-width: 0; padding: 6px 3px; border-radius: 9px; text-align: center; align-content: center; }
+  .nav-relief b { font-size: 13px; white-space: nowrap; }
+  .nav-relief small { font-size: 9.5px; white-space: nowrap; }
+  .nav-setup-actions { position: sticky; bottom: 0; margin: 2px -14px 0; padding: 10px 14px calc(10px + env(safe-area-inset-bottom)); }
+  .nav-setup-actions .button-go { min-height: 48px; }
+}

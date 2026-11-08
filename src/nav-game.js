@@ -204,7 +204,7 @@ export function createNavGame(api) {
   $('navMoonDay').addEventListener('input', () => { moonDay = Number($('navMoonDay').value); writeStorage(MOON_KEY, moonDay); updateMoonPreview(); });
   $('navStartHour').addEventListener('change', () => { startHour = Number($('navStartHour').value); writeStorage(HOUR_KEY, startHour); updateMoonPreview(); });
   let quality = readStorage('topolab-nav-quality', matchMedia('(pointer: coarse)').matches ? 'light' : 'full');
-  if (!['full', 'light'].includes(quality)) quality = 'full';
+  if (!['full', 'light', 'low'].includes(quality)) quality = 'full';
   document.querySelectorAll('input[name="navQuality"]').forEach((input) => {
     input.checked = input.value === quality;
     input.addEventListener('change', () => { quality = input.value; writeStorage('topolab-nav-quality', quality); });
@@ -657,9 +657,10 @@ export function createNavGame(api) {
     const rand = random(0x5eed + api.mapSize());
     const reach = reachRadiusMeters(extent);
     const area = (extent / 1000) ** 2;
-    const lite = quality === 'light'; // phones: lighter scenery
+    const lite = quality !== 'full'; // phones: lighter scenery
+    const low = quality === 'low';   // maximum speed: sparse scenery (and low resolution, scene.js)
     // Far chunks become impostors (bakeImpostors), so the hills can carry many more trees.
-    const treeCount = Math.min(lite ? 900 : 2800, Math.round(160 * area));
+    const treeCount = Math.min(low ? 450 : lite ? 900 : 2800, Math.round(160 * area));
     const vegetation = (geometry, height, amount, key) => {
       const material = addSurface(addWindSway(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .95 }), { height, amount, key }), 'plant');
       return { geometry, material };
@@ -670,7 +671,7 @@ export function createNavGame(api) {
     const pineMaterial = addSurface(addWindSway(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .95 }), { height: 6, amount: .035, key: 'pine' }), 'plant');
     const oakMaterial = addSurface(addWindSway(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .95 }), { height: 4, amount: .03, key: 'oak' }), 'plant');
     const rockMaterial = addSurface(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .9 }), 'rock');
-    const shrubs = new THREE.InstancedMesh(shrubKind.geometry, shrubKind.material, lite ? 320 : 640);
+    const shrubs = new THREE.InstancedMesh(shrubKind.geometry, shrubKind.material, low ? 120 : lite ? 320 : 640);
     const matrix = new THREE.Matrix4();
     const quaternion = new THREE.Quaternion();
     const colour = new THREE.Color();
@@ -722,7 +723,7 @@ export function createNavGame(api) {
     place({ count: Math.round(treeCount * .55), high: oakHigh, low: oakGeometry(0), material: oakMaterial, accept: gentle,
       size: () => { const r = .7 + rand() * .6; return { x: r, y: r * (.85 + rand() * .3) }; },
       tint: () => colour.setHSL(.2 + rand() * .06, .15 + rand() * .15, .78 + rand() * .17), sink: .02 });
-    place({ count: Math.min(lite ? 900 : 1800, Math.round(120 * area)), high: rockGeometry(3.7, 1), low: rockGeometry(3.7, 0), material: rockMaterial,
+    place({ count: Math.min(low ? 350 : lite ? 900 : 1800, Math.round(120 * area)), high: rockGeometry(3.7, 1), low: rockGeometry(3.7, 0), material: rockMaterial,
       accept: (u, v) => .12 + Math.min(1, realSlope(u, v) / .3) * .88,
       size: () => { const r = .35 + rand() ** 2.2 * 2.6; return { x: r, y: r * (.7 + rand() * .5) }; },
       tint: () => colour.setHSL(.1 + rand() * .04, .05 + rand() * .08, .8 + rand() * .18), sink: .25, tilt: .6 });
@@ -732,7 +733,7 @@ export function createNavGame(api) {
     group.add(shrubs);
 
     // Grass tufts around the walker (re-laid as you move; see updateGrass).
-    const grassCount = lite ? 1400 : 3600;
+    const grassCount = low ? 300 : lite ? 1400 : 3600;
     const grass = new THREE.InstancedMesh(grassTuftGeometry(), addWindSway(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1 }), { height: .4, amount: .55, key: 'grass' }), grassCount);
     grass.frustumCulled = false;
     grass.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
@@ -744,7 +745,7 @@ export function createNavGame(api) {
     for (let i = 0; i < shrubs.count; i++) shrubs.setColorAt(i, colour.setHSL(.15 + shrubSpots[i].tone * .1, .12 + rand() * .15, .82 + rand() * .15));
 
     // Dust kicked up by gusts, running feet and galloping camels.
-    const dust = createDust(lite ? 120 : 260);
+    const dust = createDust(low ? 50 : lite ? 120 : 260);
     group.add(dust.points);
 
     // Drone mode: a soft dark disc on the ground under the drone (helps judge height).
@@ -1644,6 +1645,20 @@ export function createNavGame(api) {
   }
 
   let starting = false;
+  // The chosen exaggeration, held so the field's relief stays under ~1.5 km: ×10 suits a drawn
+  // map (~150 m of relief) but would raise a real mountain (real-terrain.js) into a wall.
+  function fieldExaggeration(chosen) {
+    let low = Infinity;
+    let high = -Infinity;
+    for (let y = 0; y <= 48; y++) for (let x = 0; x <= 48; x++) {
+      const h = api.height(x / 48, y / 48);
+      low = Math.min(low, h);
+      high = Math.max(high, h);
+    }
+    const span = high - low;
+    return span > 0 ? Math.max(1, Math.min(chosen, 1500 / span)) : chosen;
+  }
+
   async function start() {
     if (!course || points.length < 3 || starting) return;
     starting = true;
@@ -1651,7 +1666,7 @@ export function createNavGame(api) {
     api.pauseRender?.(true);
     try {
       await loading.step(.04, 'מכין כרטיס פרויקט…');
-      api.enter({ exaggeration: relief, quality, isDay: timeOption === 'day' });
+      api.enter({ exaggeration: fieldExaggeration(relief), quality, isDay: timeOption === 'day' });
       await loading.step(.12, 'מתבכיין לרכז…');
       disposeWorld();
       world = buildWorld();

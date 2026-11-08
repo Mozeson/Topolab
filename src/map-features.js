@@ -121,11 +121,11 @@ function drawArea2D(ctx, canvas, dpr, feature, previewPoint) {
   source.forEach((p, i) => (i ? ctx.lineTo(p.u * canvas.width, p.v * canvas.height) : ctx.moveTo(p.u * canvas.width, p.v * canvas.height)));
   ctx.closePath();
   // Translucent so the contour lines underneath stay readable, as on a printed map.
-  ctx.globalAlpha = previewPoint ? .45 : .62;
+  ctx.globalAlpha = previewPoint ? .45 : .42;
   ctx.fillStyle = areaPattern(ctx, feature.type, dpr);
   ctx.fill('evenodd');
-  ctx.globalAlpha = 1;
-  ctx.lineWidth = 1.3 * dpr;
+  ctx.globalAlpha = previewPoint ? 1 : .6;
+  ctx.lineWidth = .8 * dpr;
   ctx.strokeStyle = area.ink;
   if (previewPoint) ctx.setLineDash([5 * dpr, 4 * dpr]);
   ctx.stroke();
@@ -138,22 +138,26 @@ function drawFeature2D(ctx, canvas, dpr, feature, previewPoint = null) {
   const points = source.map((point) => ({ x: point.u * canvas.width, y: point.v * canvas.height }));
   if (points.length < 2) return;
   ctx.save();
+  // Thin and a little transparent so the contour lines keep the lead, as on a printed map.
+  // Imported streams (real-terrain.js) come in many short pieces: no arrow on each one.
+  ctx.globalAlpha = previewPoint ? 1 : .88;
+  const arrows = !feature.imported;
   if (feature.type === 'trail') {
-    strokePolyline(ctx, points, 1.7 * dpr, '#343b38', [6 * dpr, 5 * dpr]);
+    strokePolyline(ctx, points, 1.15 * dpr, '#343b38', [5 * dpr, 4 * dpr]);
   } else if (feature.type === 'markedTrail') {
-    strokePolyline(ctx, points, 3.8 * dpr, 'rgba(255,255,247,.82)');
-    strokePolyline(ctx, points, 2.1 * dpr, TRAIL_COLORS[feature.color] || TRAIL_COLORS.red);
+    strokePolyline(ctx, points, 2.7 * dpr, 'rgba(255,255,247,.7)');
+    strokePolyline(ctx, points, 1.5 * dpr, TRAIL_COLORS[feature.color] || TRAIL_COLORS.red);
   } else if (feature.type === 'dirtRoad') {
-    strokeParallelSegments(ctx, points, 2.2 * dpr, 1.25 * dpr, '#4f4a3e', [7 * dpr, 4 * dpr]);
+    strokeParallelSegments(ctx, points, 1.6 * dpr, .85 * dpr, '#4f4a3e', [6 * dpr, 4 * dpr]);
   } else if (feature.type === 'road') {
-    strokePolyline(ctx, points, 7 * dpr, '#454b48');
-    strokePolyline(ctx, points, 4.6 * dpr, '#e9c77b');
+    strokePolyline(ctx, points, 4.6 * dpr, '#5a5f5c');
+    strokePolyline(ctx, points, 3 * dpr, '#ecd08f');
   } else if (feature.type === 'perennialStream') {
-    strokePolyline(ctx, points, 3 * dpr, '#237eb1');
-    drawFlowArrow(ctx, points, '#237eb1', dpr);
+    strokePolyline(ctx, points, 2 * dpr, '#237eb1');
+    if (arrows) drawFlowArrow(ctx, points, '#237eb1', dpr);
   } else if (feature.type === 'intermittentStream') {
-    strokePolyline(ctx, points, 2.6 * dpr, '#368bb7', [9 * dpr, 6 * dpr]);
-    drawFlowArrow(ctx, points, '#368bb7', dpr);
+    strokePolyline(ctx, points, 1.6 * dpr, '#368bb7', [7 * dpr, 5 * dpr]);
+    if (arrows) drawFlowArrow(ctx, points, '#368bb7', dpr);
   }
   if (feature.validation?.invalidSegments?.length) {
     for (const [a, b] of feature.validation.invalidSegments) {
