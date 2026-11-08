@@ -176,6 +176,7 @@
             <div class="nav-hint" id="navHint" aria-live="polite"></div>
             <div class="nav-keys" id="navKeys"><kbd>W</kbd><kbd>↑</kbd> קדימה · <kbd>A</kbd><kbd>D</kbd> פנייה · גרירה להסתכלות · <kbd>Shift</kbd> ריצה · <kbd>M</kbd> מפה · <kbd>Esc</kbd> השהיה</div>
             <div class="nav-spit" id="navSpit" aria-hidden="true"></div>
+            <div class="nav-ghost-flash" id="navGhostFlash" aria-hidden="true"></div>
             <div class="nav-fade" id="navFade" aria-hidden="true"></div>
             <div class="nav-flash" id="navFlash" aria-live="assertive"></div>
             <div class="nav-countdown" id="navCountdown" hidden></div>
@@ -609,6 +610,11 @@
           <label><input type="radio" name="navCamels" value="none"><b>בלי</b></label>
           <label><input type="radio" name="navCamels" value="few" checked><b>מעט</b></label>
           <label><input type="radio" name="navCamels" value="many"><b>הרבה</b></label>
+        </div>
+        <div class="nav-relief nav-ghosts" role="radiogroup" aria-label="גבול גזרה">
+          <span title="קו סגול סביב המסלול. מי שמתקרב אליו מעורר להקת רוחות שרצות אליו וצורחות. רוח שתופסת מוסיפה 25 שניות ומחזירה אתכם פנימה. בריצה (Shift) בורחים מהן.">👻 ג״ג</span>
+          <label><input type="radio" name="navGhosts" value="none"><b>בלי</b></label>
+          <label><input type="radio" name="navGhosts" value="ghosts"><b>עם רוחות</b><small>גבול גזרה</small></label>
         </div>
         <div class="nav-relief nav-time" role="radiogroup" aria-label="שעת הניווט">
           <span>שעה</span>

@@ -11,13 +11,14 @@ import { readCoordinate, formatCoordinate } from './grid-coords.js';
 import { DRONE, FPV, stepAltitude, stepLanding, stepBattery, canReadNote, feedCheat, fpvTopSpeed, fpvVelocity, fpvGround, terrainAhead } from './drone.js';
 import {
   windUniforms, addWindSway, addSurface, pineGeometry, oakGeometry, shrubGeometry, rockGeometry, grassTuftGeometry,
-  createCamel, poseCamel, createHands, createDust,
+  createCamel, poseCamel, createHands, createDust, createGhost,
 } from './field-models.js';
 import { createFieldAudio } from './field-audio.js';
 import { createWind, windAt, windSpeedFactor, describeWind } from './wind.js';
 import { effortLoad, stepFatigue, breathing, runFactor } from './effort.js';
 import { pickCaveSpot } from './cave.js';
 import { createCaveMound, createCaveInterior, createSkyRoad, CAVE_LENGTH, ROAD } from './netivot.js';
+import { GHOST, sectorBoundary, signedDistance, spawnGhosts, stepGhost, pushInside, drawSector } from './ghosts.js';
 import { CAMEL, valleyScore, sampleGrid, spawnCamels, stepCamel, separateCamels, metersBetween, detectRadius } from './camels.js';
 import {
   skyState, skyBasis, starVector, BRIGHT_STARS, moonPhase, moonTimes, moonDirection, hebrewDay, formatHour, altitude, azimuth, directionName,
@@ -42,6 +43,7 @@ const RELIEF_OPTIONS = [1, 3, 5, 10];
 const CARDINALS = { 0: 'צ', 90: 'מז', 180: 'ד', 270: 'מע' };
 const COMPASS_PX = 3; // pixels per degree on the compass tape
 const CAMELS_KEY = 'topolab-nav-camels';
+const GHOSTS_KEY = 'topolab-nav-ghosts';
 const TIME_KEY = 'topolab-nav-time';
 const MOON_KEY = 'topolab-nav-moon-day';
 const HOUR_KEY = 'topolab-nav-start-hour';
@@ -183,6 +185,25 @@ export function createNavGame(api) {
   for (const id of ['navMapMode', 'navShowPosition', 'navShowBearing', 'navShowDistance']) $(id).addEventListener('change', readCustomControls);
 
   // Camels in the field (camels.js) and the time of day with the moon (sky.js).
+  // The sector boundary (ghosts.js): off, or on with its ghosts.
+  let ghostsOption = readStorage(GHOSTS_KEY, 'none');
+  if (!['none', 'ghosts'].includes(ghostsOption)) ghostsOption = 'none';
+  document.querySelectorAll('input[name="navGhosts"]').forEach((input) => {
+    input.checked = input.value === ghostsOption;
+    input.addEventListener('change', () => {
+      ghostsOption = input.value;
+      writeStorage(GHOSTS_KEY, ghostsOption);
+      if (course) drawMapInto($('navBriefingCanvas'), { done: 0, nextIndex: 1, showYou: false });
+    });
+  });
+  // The boundary for the current course, or null when the option is off.
+  let sectorCache = { key: '', poly: null };
+  function sector() {
+    if (ghostsOption === 'none' || points.length < 2) return null;
+    const key = `${api.extent()}|${points.map((p) => `${p.u.toFixed(4)},${p.v.toFixed(4)}`).join(';')}`;
+    if (sectorCache.key !== key) sectorCache = { key, poly: sectorBoundary(points, api.extent()) };
+    return sectorCache.poly;
+  }
   let camelsOption = readStorage(CAMELS_KEY, 'few');
   if (!(camelsOption in CAMEL.counts)) camelsOption = 'few';
   document.querySelectorAll('input[name="navCamels"]').forEach((input) => {
@@ -369,6 +390,8 @@ export function createNavGame(api) {
     ctx.clearRect(0, 0, w, h);
     if (mapBase) ctx.drawImage(mapBase, 0, 0, w, h);
     if (track?.length > 1) drawTrack(ctx, track, w, h, dpr);
+    const poly = sector();
+    if (poly) drawSector(ctx, poly, { width: w, height: h, dpr });
     drawCourse(ctx, course, { width: w, height: h, dpr, done, nextIndex, scale: w > 500 * dpr ? 1.2 : 1 });
     drawGridRefs(ctx, w, h, dpr, done);
     drawNorthArrow(ctx, w, dpr);
@@ -772,6 +795,7 @@ export function createNavGame(api) {
       group.add(lamp, lampTarget, spill);
     }
     const camels = buildCamels(group, CAMEL.counts[camelsOption] || 0);
+    const ghosts = ghostsOption === 'ghosts' ? buildGhosts(group) : [];
     // The cave blooper: placed per run in a gully (placeCave).
     const cave = createCaveMound();
     cave.group.visible = false;
@@ -779,7 +803,7 @@ export function createNavGame(api) {
 
     scene.add(group);
     return {
-      group, flags, sky, droneShadow, stars, starBasis: new THREE.Matrix4(), lamp, lampTarget, spill, camels,
+      group, flags, sky, droneShadow, stars, starBasis: new THREE.Matrix4(), lamp, lampTarget, spill, camels, ghosts,
       dust, chunks, cave, textures: [orange, magenta, ...extras.textures],
       // Scattered around the walker on world-anchored tiles (see updateScatter).
       scatters: [
@@ -787,6 +811,17 @@ export function createNavGame(api) {
         { mesh: shrubs, spots: shrubSpots, tile: 320, maxSlope: .55, avoidPaths: true, sink: .05 },
       ],
     };
+  }
+
+  function buildGhosts(group) {
+    const list = [];
+    for (let i = 0; i < GHOST.count; i++) {
+      const ghost = createGhost();
+      ghost.root.visible = false;
+      group.add(ghost.root);
+      list.push(ghost);
+    }
+    return list;
   }
 
   const lampRange = () => Math.max(60, api.extent() * .025); // metres lit ahead
@@ -1026,6 +1061,8 @@ export function createNavGame(api) {
       fpv: false, vel: { x: 0, y: 0, z: 0 }, roll: 0, fov: 92, shake: 0, maxSpeed: 0, tricks: 0, trick: null, crashes: 0, crashCool: 0, throttle: 0, boosting: false,
       // Camels (camels.js): catches cost time and leave you stunned for a moment.
       stun: 0, camelCatches: 0, camelEscapes: 0, chases: 0, camelTalk: -99, camelFlash: -99, camelSpotted: false,
+      // The sector boundary (ghosts.js): a pack while haunting, catches cost time.
+      ghostPack: null, ghostWarned: false, ghostCatches: 0, hauntings: 0, sectorD: Infinity,
       // Dusk / night (sky.js): a sky clock that runs as fast as the walking (≥ ×12).
       night: timeOption !== 'day', clock: startClockFor(), startClock: startClockFor(),
       timeScale: clamp(walkSpeed() / 1.4, 12, 30), lamp: false, lampHinted: false, skyTimer: 0, sky: null,
@@ -1115,6 +1152,176 @@ export function createNavGame(api) {
       world.spill.position.copy(camera.position);
       world.spill.intensity = run?.lamp ? SPILL_INTENSITY : 0;
     }
+  }
+
+  // ——— The sector boundary and its ghosts (ghosts.js) ———
+  function stepGhosts(dt) {
+    const poly = sector();
+    if (!poly) return;
+    const o = api.observer;
+    const extent = api.extent();
+    const d = signedDistance(o, poly, extent);
+    run.sectorD = d;
+    if (!run.ghostPack) {
+      if (d < GHOST.warn && !run.ghostWarned) {
+        run.ghostWarned = true;
+        whisper();
+        flash('⚠️ אתם מתקרבים לגבול הגזרה (ג״ג). לא חוצים את הקו הסגול!', true);
+      }
+      if (d > GHOST.warn + 50) run.ghostWarned = false;
+      if (d < GHOST.wake) {
+        run.ghostPack = spawnGhosts({ player: o, poly, extent });
+        run.hauntings++;
+        scream(1.2, 0);
+        setTimeout(() => scream(.9, .6), 350);
+        setTimeout(() => scream(.9, -.6), 700);
+        flash('👻 רוחות הג״ג! ברחו פנימה, מהר! (Shift)', true);
+      }
+      return;
+    }
+    let caught = false;
+    for (const g of run.ghostPack) {
+      if (g.fade !== undefined) { g.fade -= dt * .7; stepGhost(g, { dt, player: o, extent, walkSpeed: walkSpeed(), time: run.elapsed }); continue; }
+      const event = stepGhost(g, { dt, player: o, extent, walkSpeed: walkSpeed(), time: run.elapsed });
+      if (event === 'caught') caught = true;
+      else if (event === 'scream' && g.delay <= 0) {
+        const gd = Math.hypot(g.u - o.u, g.v - o.v) * extent;
+        if (gd < 260) scream(.35 + .5 * (1 - gd / 260), ghostPan(g));
+      }
+    }
+    if (caught) {
+      run.ghostCatches++;
+      run.stun = 1.2;
+      scream(1.6, 0);
+      const flashEl = $('navGhostFlash');
+      flashEl.classList.remove('hit');
+      void flashEl.offsetWidth;
+      flashEl.classList.add('hit');
+      const back = pushInside(o, poly, extent);
+      o.u = back.u;
+      o.v = back.v;
+      dismissGhosts();
+      flash(`👻 הרוחות תפסו אתכם! +${GHOST.penalty} ש׳, וזרקו אתכם בחזרה פנימה`, true);
+      updatePeekUI();
+    } else if (d > GHOST.calm && run.ghostPack.some((g) => g.fade === undefined)) {
+      dismissGhosts();
+      flash('😮‍💨 הרוחות חזרו אל מעבר לקו');
+    }
+    if (run.ghostPack.every((g) => g.fade !== undefined && g.fade <= 0)) { run.ghostPack = null; run.ghostWarned = d < GHOST.warn; }
+  }
+
+  function dismissGhosts() {
+    for (const g of run.ghostPack || []) { g.state = 'flee'; g.fade ??= 1; }
+  }
+
+  // Stereo position of a ghost relative to where the walker faces (-1 left … 1 right).
+  function ghostPan(g) {
+    const o = api.observer;
+    const bearing = Math.atan2(g.u - o.u, -(g.v - o.v)) * 180 / Math.PI;
+    return Math.sin(((bearing - o.heading) * Math.PI) / 180);
+  }
+
+  function updateGhostMeshes(dt) {
+    const list = world?.ghosts;
+    if (!list?.length) return;
+    const pack = run?.ghostPack;
+    const mtw = api.metersToWorld();
+    const vs = api.verticalScale();
+    const W = api.worldSize();
+    const scale = camelScale() * mtw;
+    const t = performance.now() / 1000;
+    const cam = api.camera().position;
+    list.forEach((ghost, i) => {
+      const g = pack?.[i];
+      const alpha = g && g.delay <= 0 ? Math.max(0, Math.min(1, g.fade ?? 1)) : 0;
+      ghost.root.visible = alpha > .01;
+      if (!ghost.root.visible) return;
+      const hover = (.6 + Math.sin(t * 2.3 + g.wobble) * .3) * scale;
+      ghost.root.position.set((g.u - .5) * W, groundAt(g.u, g.v) * vs + hover, (g.v - .5) * W);
+      ghost.root.scale.setScalar(scale);
+      // Always faces the walker; sways and stretches as it flies.
+      ghost.root.lookAt(cam.x, ghost.root.position.y, cam.z);
+      ghost.root.rotateZ(Math.sin(t * 3 + g.wobble) * .12);
+      ghost.body.scale.set(1, 1 + Math.sin(t * 5 + g.wobble) * .06, 1);
+      ghost.arms.forEach((arm, k) => { arm.rotation.x = -1.75 + Math.sin(t * 7 + g.wobble + k * 2) * .35; });
+      ghost.mouth.scale.y = 1.55 + Math.max(0, Math.sin(t * 9 + g.wobble)) * .7;
+      ghost.material.opacity = .8 * alpha;
+      ghost.dark.opacity = .95 * alpha;
+      ghost.material.emissiveIntensity = run?.night ? 1.3 : .6;
+    });
+  }
+
+  // A ghost's scream: a high voice gliding up and down with a fast tremble, through a
+  // vowel-like filter, over a breathy hiss. Synthesised (no sound files), panned.
+  function scream(strength = 1, pan = 0) {
+    if (!soundOn) return;
+    try {
+      audio ||= new (window.AudioContext || window.webkitAudioContext)();
+      const t = audio.currentTime;
+      const length = 1.1 + Math.random() * .5;
+      const base = 520 + Math.random() * 380;
+      const out = audio.createGain();
+      out.gain.setValueAtTime(.0001, t);
+      out.gain.exponentialRampToValueAtTime(.16 * strength, t + .08);
+      out.gain.setValueAtTime(.16 * strength, t + length * .6);
+      out.gain.exponentialRampToValueAtTime(.0001, t + length);
+      const panner = audio.createStereoPanner ? audio.createStereoPanner() : null;
+      if (panner) { panner.pan.value = Math.max(-1, Math.min(1, pan)); out.connect(panner).connect(audio.destination); } else out.connect(audio.destination);
+      const voice = audio.createOscillator();
+      voice.type = 'sawtooth';
+      voice.frequency.setValueAtTime(base, t);
+      voice.frequency.exponentialRampToValueAtTime(base * 1.9, t + length * .3);
+      voice.frequency.exponentialRampToValueAtTime(base * .7, t + length);
+      const vibrato = audio.createOscillator();
+      vibrato.frequency.value = 11 + Math.random() * 6;
+      const depth = audio.createGain();
+      depth.gain.value = base * .06;
+      vibrato.connect(depth).connect(voice.frequency);
+      const formant = audio.createBiquadFilter();
+      formant.type = 'bandpass';
+      formant.frequency.value = 1300;
+      formant.Q.value = 2.2;
+      voice.connect(formant).connect(out);
+      const length2 = Math.round(audio.sampleRate * length);
+      const buffer = audio.createBuffer(1, length2, audio.sampleRate);
+      const data = buffer.getChannelData(0);
+      for (let i = 0; i < length2; i++) data[i] = (Math.random() * 2 - 1) * .5;
+      const hiss = audio.createBufferSource();
+      hiss.buffer = buffer;
+      const hissFilter = audio.createBiquadFilter();
+      hissFilter.type = 'highpass';
+      hissFilter.frequency.value = 2500;
+      hiss.connect(hissFilter).connect(out);
+      voice.start(t);
+      vibrato.start(t);
+      hiss.start(t);
+      voice.stop(t + length + .05);
+      vibrato.stop(t + length + .05);
+    } catch { /* audio unavailable */ }
+  }
+
+  // The warning near the line: a low, breathy whisper that swells and fades.
+  function whisper() {
+    if (!soundOn) return;
+    try {
+      audio ||= new (window.AudioContext || window.webkitAudioContext)();
+      const t = audio.currentTime;
+      const length = 2.4;
+      const buffer = audio.createBuffer(1, Math.round(audio.sampleRate * length), audio.sampleRate);
+      const data = buffer.getChannelData(0);
+      for (let i = 0; i < data.length; i++) data[i] = (Math.random() * 2 - 1) * Math.sin(Math.PI * i / data.length) * (.6 + .4 * Math.sin(i / audio.sampleRate * 2 * Math.PI * 5));
+      const source = audio.createBufferSource();
+      source.buffer = buffer;
+      const filter = audio.createBiquadFilter();
+      filter.type = 'bandpass';
+      filter.frequency.setValueAtTime(700, t);
+      filter.frequency.linearRampToValueAtTime(1600, t + length);
+      filter.Q.value = 3;
+      const gain = audio.createGain();
+      gain.gain.value = .3;
+      source.connect(filter).connect(gain).connect(audio.destination);
+      source.start(t);
+    } catch { /* audio unavailable */ }
   }
 
   // ——— Camels ———
@@ -1735,12 +1942,13 @@ export function createNavGame(api) {
     $('navPeekBtn').querySelector('span').textContent = run?.peekOpen ? 'סגירת המפה' : 'הצצה במפה';
     const peeks = (run?.peeks || 0) * PEEK_PENALTY;
     const camels = (run?.camelCatches || 0) * CAMEL_PENALTY;
-    $('navPenalty').hidden = !(peeks + camels);
-    $('navPenalty').textContent = `עונש: ${[peeks ? `הצצות +${peeks} ש׳` : '', camels ? `🐪 +${camels} ש׳` : ''].filter(Boolean).join(' · ')}`;
+    const ghosts = (run?.ghostCatches || 0) * GHOST.penalty;
+    $('navPenalty').hidden = !(peeks + camels + ghosts);
+    $('navPenalty').textContent = `עונש: ${[peeks ? `הצצות +${peeks} ש׳` : '', camels ? `🐪 +${camels} ש׳` : '', ghosts ? `👻 +${ghosts} ש׳` : ''].filter(Boolean).join(' · ')}`;
   }
 
   // Seconds added to the clock: map peeks and camel catches.
-  const penaltySeconds = () => (run ? run.peeks * PEEK_PENALTY + run.camelCatches * CAMEL_PENALTY : 0);
+  const penaltySeconds = () => (run ? run.peeks * PEEK_PENALTY + run.camelCatches * CAMEL_PENALTY + run.ghostCatches * GHOST.penalty : 0);
 
   // Phones show the map as a thumbnail that opens into a large sheet on tap.
   const compactLayout = matchMedia('(max-width: 640px), (pointer: coarse) and (max-height: 500px)');
@@ -2476,6 +2684,7 @@ export function createNavGame(api) {
         checkControls();
         stepBody(dt, moving && !run.drone, running);
         if (world?.camels?.length) stepCamels(dt);
+        if (world?.ghosts?.length && !run.drone && !run.blooper) stepGhosts(dt);
         if (run.night) advanceClock(dt);
         checkCave();
       }
@@ -2490,6 +2699,7 @@ export function createNavGame(api) {
       if (run) updateFlags();
       updateNightObjects();
       updateCamelMeshes(dt);
+      updateGhostMeshes(dt);
       if (run) updateFieldLife(dt);
     }
     if (run) {
@@ -2544,7 +2754,7 @@ export function createNavGame(api) {
     keys.clear();
     const extent = api.extent();
     const penalty = penaltySeconds();
-    const total = totalScore({ elapsed: run.elapsed + run.camelCatches * CAMEL_PENALTY, peeks: run.peeks, penaltyPerPeek: PEEK_PENALTY });
+    const total = totalScore({ elapsed: run.elapsed + run.camelCatches * CAMEL_PENALTY + run.ghostCatches * GHOST.penalty, peeks: run.peeks, penaltyPerPeek: PEEK_PENALTY });
     const straight = courseLength(course, extent);
     const efficiency = run.walked ? Math.min(1, straight / run.walked) : 1;
     const bests = readStorage(BEST_KEY, {});
@@ -2668,6 +2878,21 @@ export function createNavGame(api) {
       applySky(skyState(run.clock, moonDay));
     },
     // Test hook: stand at a map position with a heading.
+    debugSector() { return sector(); },
+    // A pack `meters` ahead of the walker (for screenshots and tests).
+    debugGhosts(meters = 25) {
+      if (!run || !world?.ghosts?.length) return false;
+      const o = api.observer;
+      const extent = api.extent();
+      const a = o.heading * Math.PI / 180;
+      run.ghostPack = world.ghosts.map((_, i) => {
+        const side = (i - (world.ghosts.length - 1) / 2) * 6;
+        const d = meters + (i % 3) * 8;
+        return { u: o.u + (Math.sin(a) * d + Math.cos(a) * side) / extent, v: o.v + (-Math.cos(a) * d + Math.sin(a) * side) / extent,
+          delay: 0, wobble: i * 1.3, speed: .9, heading: 0, scream: 1 + i * .3, state: 'chase' };
+      });
+      return true;
+    },
     debugPlace(u, v, heading = 0) {
       if (run) Object.assign(api.observer, { u, v, heading, tilt: -6 });
     },
@@ -2684,6 +2909,8 @@ export function createNavGame(api) {
       camels: (world?.camels || []).filter((camel) => camel.data).map((camel) => ({ u: camel.data.u, v: camel.data.v, state: camel.data.state, distance: metersBetween(camel.data, api.observer, api.extent()) })),
       cave: run.cave, nearCave: run.nearCave, blooper: run.blooper ? { stage: run.blooper.stage, progress: run.blooper.progress, distance: run.blooper.distance } : null, netivot: run.netivot,
       camelCatches: run.camelCatches, camelEscapes: run.camelEscapes, camelSpotted: run.camelSpotted, stun: run.stun, penalty: penaltySeconds(),
+      ghostCatches: run.ghostCatches, hauntings: run.hauntings, sectorD: Number.isFinite(run.sectorD) ? Math.round(run.sectorD) : null, ghostsOut: run.ghostPack ? run.ghostPack.filter((g) => g.delay <= 0 && (g.fade ?? 1) > 0).length : 0,
+      ghostNear: run.ghostPack ? Math.round(Math.min(...run.ghostPack.filter((g) => g.delay <= 0).map((g) => Math.hypot(g.u - api.observer.u, g.v - api.observer.v) * api.extent()), 9999)) : null,
       route: points.map(({ u, v }) => ({ u, v })),
       fatigue: run.fatigue, wind: run.windState ? { from: run.windState.from, strength: run.windState.strength, text: describeWind(run.windState) } : null,
       night: run.night ? { clock: run.clock, lamp: run.lamp, dark: run.sky?.dark, moonlight: run.sky?.moonlight, moonAlt: run.sky?.moonAlt, moonAz: run.sky?.moonAz, sunAlt: run.sky?.sunAlt, phase: run.sky?.phase.name, stars: run.sky?.stars } : null,

@@ -1135,3 +1135,8 @@ body.nav-blooper .nav-camel-alert, body.nav-blooper .nav-keys, body.nav-blooper 
   .nav-setup-actions { position: sticky; bottom: 0; margin: 2px -14px 0; padding: 10px 14px calc(10px + env(safe-area-inset-bottom)); }
   .nav-setup-actions .button-go { min-height: 48px; }
 }
+
+/* The ghosts' catch (ghosts.js): a cold white flash that fades. */
+.nav-ghost-flash { position: absolute; inset: 0; pointer-events: none; opacity: 0; background: radial-gradient(circle, rgb(235 242 255 / 95%), rgb(160 185 255 / 70%) 60%, rgb(40 50 90 / 80%)); }
+.nav-ghost-flash.hit { animation: nav-ghost-hit 1.3s ease-out; }
+@keyframes nav-ghost-hit { 0% { opacity: 1; } 30% { opacity: .85; } 100% { opacity: 0; } }

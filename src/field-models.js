@@ -549,3 +549,49 @@ export function createDust(count = 240) {
     },
   };
 }
+
+// A ghost of the sector boundary (ghosts.js): a glowing sheet with a ragged hem, hollow black
+// eyes, a mouth open in a scream and two arms reaching forward. About 2.1 m; faces +z.
+export function createGhost() {
+  const root = new THREE.Group();
+  const profile = [[.6, 0], [.57, .25], [.5, .7], [.46, 1.1], [.47, 1.45], [.42, 1.75], [.3, 1.97], [.12, 2.08], [.001, 2.1]]
+    .map(([r, y]) => new THREE.Vector2(r, y));
+  const sheet = new THREE.LatheGeometry(profile, 32);
+  const pos = sheet.attributes.position;
+  for (let i = 0; i < pos.count; i++) {
+    const y = pos.getY(i);
+    if (y > .35) continue;
+    const a = Math.atan2(pos.getZ(i), pos.getX(i));
+    pos.setY(i, y + (.35 - y) / .35 * .2 * Math.sin(a * 7)); // tattered points along the hem
+  }
+  sheet.computeVertexNormals();
+  const material = new THREE.MeshStandardMaterial({
+    color: 0xf2f6ff, emissive: 0x9db4ff, emissiveIntensity: .6, roughness: .55,
+    transparent: true, opacity: .8, depthWrite: false, side: THREE.DoubleSide, fog: true,
+  });
+  const body = new THREE.Mesh(sheet, material);
+  root.add(body);
+  const dark = new THREE.MeshBasicMaterial({ color: 0x07070d, transparent: true, opacity: .95, depthWrite: false });
+  const eye = new THREE.SphereGeometry(.085, 12, 8);
+  for (const x of [-.15, .15]) {
+    const e = new THREE.Mesh(eye, dark);
+    e.scale.set(1, 1.45, .5);
+    e.position.set(x, 1.63, .41);
+    e.rotation.z = x > 0 ? -.25 : .25; // slanted: angry
+    root.add(e);
+  }
+  const mouth = new THREE.Mesh(new THREE.SphereGeometry(.12, 14, 10), dark);
+  mouth.scale.set(.85, 1.55, .4);
+  mouth.position.set(0, 1.3, .45);
+  root.add(mouth);
+  const arms = [];
+  const armGeometry = new THREE.ConeGeometry(.11, .6, 10).translate(0, -.3, 0); // pivot at the shoulder
+  for (const side of [-1, 1]) {
+    const arm = new THREE.Mesh(armGeometry, material);
+    arm.position.set(side * .42, 1.32, .12);
+    arm.rotation.set(-1.75, 0, side * -.25); // reaching forward
+    root.add(arm);
+    arms.push(arm);
+  }
+  return { root, body, material, dark, mouth, arms };
+}

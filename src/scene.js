@@ -3358,6 +3358,8 @@ window.__seek = () => {
 };
 window.__play = () => {};
 window.__NAV_TELEPORT__ = () => navGame?.debugTeleport();
+window.__NAV_SECTOR__ = () => navGame?.debugSector();
+window.__NAV_GHOSTS__ = (meters) => navGame?.debugGhosts(meters);
 window.__NAV_LOOK_AT_NEXT__ = (meters) => navGame?.debugApproach(meters);
 window.__NAV_PLACE__ = (u, v, heading) => navGame?.debugPlace(u, v, heading);
 window.__NAV_DRONE__ = () => navGame?.debugDrone();
