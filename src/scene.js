@@ -14,7 +14,7 @@ import { initShortcuts, SHORTCUTS, HOLD_HINTS, shortcutLabel } from './shortcuts
 import { emptyCourse, sanitizeCourse, isRunnable, generateCourse, courseLength, drawCourse, coursePoints, cloneCourse } from './course.js';
 import { createNavGame } from './nav-game.js';
 import { DEFAULT_ORIGIN, sanitizeOrigin, readCoordinate, formatCoordinate } from './grid-coords.js';
-import { fetchHeights, fetchOsm, osmToFeatures, chooseDatum } from './real-terrain.js';
+import { fetchHeights, fetchOsm, osmToFeatures, chooseDatum, searchPlaces } from './real-terrain.js';
 import { isItm } from './itm.js';
 import * as THREE from 'three';
 import { createFieldEngine } from './field-engine.js';
@@ -2179,6 +2179,54 @@ function retryOsm(origin, extent, place) {
     .catch((error) => (abort.signal.aborted ? 'aborted' : (console.warn('OSM unavailable', error), null)))
     .then((elements) => applyOsm(elements, { origin, extent, place, abort }));
 }
+
+// Place search (Nominatim): results fill the coordinates and size, then load the place.
+let placeSearchAbort = null;
+async function searchPlace(query) {
+  const list = $('realResults');
+  query = query.trim();
+  if (query.length < 2) return;
+  placeSearchAbort?.abort();
+  const abort = new AbortController();
+  placeSearchAbort = abort;
+  list.hidden = false;
+  list.innerHTML = '<li class="real-results-note">מחפש…</li>';
+  let places;
+  try {
+    places = await searchPlaces(query, { signal: abort.signal });
+  } catch (error) {
+    if (abort.signal.aborted) return;
+    console.warn('Place search failed', error);
+    list.innerHTML = '<li class="real-results-note">החיפוש לא הצליח. בדקו את החיבור ונסו שוב.</li>';
+    return;
+  }
+  if (abort.signal.aborted) return;
+  list.replaceChildren();
+  if (!places.length) {
+    list.innerHTML = '<li class="real-results-note">לא נמצא מקום בישראל בשם הזה. נסו שם אחר או הקלידו נ״צ.</li>';
+    return;
+  }
+  for (const place of places) {
+    const item = document.createElement('li');
+    const button = document.createElement('button');
+    button.type = 'button';
+    const name = document.createElement('strong');
+    name.textContent = place.name;
+    const detail = document.createElement('small');
+    detail.textContent = `${place.detail ? place.detail + ' · ' : ''}${place.n}/${place.e}`;
+    button.append(name, detail);
+    button.addEventListener('click', () => {
+      $('realE').value = String(place.e);
+      $('realN').value = String(place.n);
+      $('realSize').value = String(place.sizeKm);
+      list.hidden = true;
+      loadRealTerrain(place.e, place.n, place.sizeKm);
+    });
+    item.append(button);
+    list.append(item);
+  }
+}
+$('realSearchForm').addEventListener('submit', (event) => { event.preventDefault(); searchPlace($('realSearch').value); });
 
 $('realTerrainBtn').addEventListener('click', () => loadRealTerrain(Number($('realE').value), Number($('realN').value), Number($('realSize').value)));
 for (const id of ['realE', 'realN']) $(id).addEventListener('keydown', (event) => { if (event.key === 'Enter') $('realTerrainBtn').click(); });

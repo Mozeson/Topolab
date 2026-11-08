@@ -92,3 +92,31 @@ test('OSM elements become Topolab features in the right place', () => {
   assert.equal(trailColor({ colour: 'Green' }), 'green');
   assert.match(overpassQuery(origin, 4000), /32\.6\d+,35\.3\d+,32\.7\d+,35\.4\d+/);
 });
+
+test('staggered race: first answer wins, failures start the next source at once', async () => {
+  const { raceStaggered } = await import('../src/real-terrain.js');
+  const wait = (ms, value, fail = false) => (signal) => new Promise((resolve, reject) => {
+    const t = setTimeout(() => (fail ? reject(new Error(value)) : resolve(value)), ms);
+    signal.addEventListener('abort', () => { clearTimeout(t); reject(new Error('aborted')); });
+  });
+  const started = Date.now();
+  assert.equal(await raceStaggered([wait(500, 'slow'), wait(20, 'fast')], { stagger: [50] }), 'fast');
+  assert.ok(Date.now() - started < 300);
+  assert.equal(await raceStaggered([wait(5, 'x', true), wait(5, 'second')], { stagger: [10000] }), 'second');
+  await assert.rejects(raceStaggered([wait(5, 'a', true), wait(5, 'b', true)], { stagger: [1] }), /b/);
+});
+
+test('place search results become ITM points with a fitting map size', async () => {
+  const { parsePlaces, suggestSize } = await import('../src/real-terrain.js');
+  const places = parsePlaces([
+    { lat: '31.4523959', lon: '35.3848241', name: 'עין גדי', display_name: 'עין גדי, מועצה אזורית תמר, נפת באר שבע, ישראל', boundingbox: ['31.4495698', '31.4556439', '35.3791049', '35.3893316'] },
+    { lat: '48.85', lon: '2.35', name: 'Paris', display_name: 'Paris, France' },
+  ]);
+  assert.equal(places.length, 1);
+  assert.equal(places[0].name, 'עין גדי');
+  assert.equal(places[0].detail, 'מועצה אזורית תמר, נפת באר שבע');
+  assert.ok(Math.abs(places[0].e - 237000) < 2000 && Math.abs(places[0].n - 597000) < 2000, `${places[0].n}/${places[0].e}`);
+  assert.equal(places[0].sizeKm, 4);
+  assert.equal(suggestSize(['31.0', '31.04', '35.0', '35.04']), 6);
+  assert.equal(suggestSize(['30.4', '30.7', '34.6', '35.0']), 8);
+});

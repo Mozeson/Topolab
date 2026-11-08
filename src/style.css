@@ -1098,3 +1098,12 @@ body.nav-blooper .nav-camel-alert, body.nav-blooper .nav-keys, body.nav-blooper 
 #realTerrainStatus.busy::before { content: ''; display: inline-block; width: 9px; height: 9px; margin-inline-end: 6px; border: 2px solid currentColor; border-top-color: transparent; border-radius: 50%; vertical-align: -1px; animation: real-spin .8s linear infinite; }
 @keyframes real-spin { to { transform: rotate(360deg); } }
 .map-attribution { position: absolute; z-index: 2; bottom: 3px; right: 22px; max-width: 60%; color: #4e6870; font-size: 9px; line-height: 1.2; pointer-events: none; background: rgba(248, 246, 229, .75); padding: 1px 4px; border-radius: 3px; direction: ltr; }
+
+.real-search { display: flex; gap: 6px; }
+.real-search input { flex: 1; min-width: 0; padding: 7px 9px; border: 1px solid var(--line, #cfd6cf); border-radius: 8px; font: inherit; font-size: 13px; color: inherit; background: var(--surface, #fff); }
+.real-results { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; max-height: 210px; overflow-y: auto; border: 1px solid var(--line, #cfd6cf); border-radius: 8px; }
+.real-results button { width: 100%; display: grid; gap: 1px; padding: 6px 9px; border: 0; background: transparent; color: inherit; font: inherit; text-align: start; cursor: pointer; }
+.real-results button:hover, .real-results button:focus-visible { background: rgba(60, 110, 80, .1); }
+.real-results strong { font-size: 13px; }
+.real-results small { color: var(--ink-soft); font-size: 11px; }
+.real-results-note { padding: 7px 9px; color: var(--ink-soft); font-size: 12px; }

@@ -497,6 +497,11 @@
           </div>
           <p class="popover-section-title">שטח אמיתי לפי נ״צ</p>
           <div class="real-terrain">
+            <form class="real-search" id="realSearchForm" role="search">
+              <input id="realSearch" type="search" placeholder="חיפוש מקום: עין גדי, נחל עמוד, מצדה…" aria-label="חיפוש מקום" autocomplete="off" enterkeyhint="search">
+              <button class="footer-button" type="submit">חיפוש</button>
+            </form>
+            <ul class="real-results" id="realResults" aria-label="תוצאות חיפוש" hidden></ul>
             <div class="real-terrain-fields">
               <label for="realE">מזרח <input id="realE" type="number" min="100000" max="300000" step="100" inputmode="numeric" value="236900"></label>
               <label for="realN">צפון <input id="realN" type="number" min="350000" max="820000" step="100" inputmode="numeric" value="732500"></label>

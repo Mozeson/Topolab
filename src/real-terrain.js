@@ -8,7 +8,7 @@ import { itmToWgs84, wgs84ToItm } from './itm.js';
 export const TILE_URL = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png';
 export const OSM_API_URL = 'https://api.openstreetmap.org/api/0.6/map';
 export const OVERPASS_URLS = ['https://overpass-api.de/api/interpreter', 'https://overpass.private.coffee/api/interpreter', 'https://overpass.kumi.systems/api/interpreter'];
-const OVERPASS_WAIT = 20000; // ms per server: public servers sometimes queue a request for minutes
+const OVERPASS_WAIT = 25000; // ms per server: public servers sometimes queue a request for minutes
 const OSM_API_WAIT = 25000;
 export const ATTRIBUTION = 'גבהים: Terrain Tiles (Mapzen, AWS Open Data; SRTM) · דרכים ותכסית: © OpenStreetMap contributors (ODbL)';
 const TILE = 256;
@@ -425,29 +425,117 @@ async function fetchWithin(url, options, ms, signal) {
   }
 }
 
-// Overpass servers in turn (each with a deadline), then the main OSM API. `onTry(n)` reports
-// which attempt is running so the page can say it is still working.
-export async function fetchOsm({ origin, extent, signal, onTry = () => {} }) {
-  const body = 'data=' + encodeURIComponent(overpassQuery(origin, extent));
-  let lastError = null;
-  let attempt = 0;
-  for (const url of OVERPASS_URLS) {
-    onTry(++attempt);
-    try {
-      const data = await fetchWithin(url, { method: 'POST', body, headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }, OVERPASS_WAIT, signal);
-      return data.elements || [];
-    } catch (error) {
-      if (signal?.aborted) throw error;
-      console.warn('Overpass failed', url, error);
-      lastError = error;
-    }
-  }
-  // Fallback: the main OSM API's raw map call (fine for small boxes; returns every object).
-  onTry(++attempt);
+// Start several sources one after another and keep the first that answers; the rest are
+// cancelled. A source that fails starts the next one at once. `tasks` take an abort signal.
+export function raceStaggered(tasks, { stagger = [], signal } = {}) {
+  return new Promise((resolve, reject) => {
+    const controller = new AbortController();
+    let next = 0;
+    let running = 0;
+    let settled = false;
+    let lastError = null;
+    let timer = null;
+    const finish = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      controller.abort();
+      signal?.removeEventListener('abort', onAbort);
+      fn(value);
+    };
+    const onAbort = () => finish(reject, signal.reason ?? new Error('aborted'));
+    if (signal?.aborted) { onAbort(); return; }
+    signal?.addEventListener('abort', onAbort, { once: true });
+    const launch = () => {
+      clearTimeout(timer);
+      if (settled || next >= tasks.length) return;
+      const index = next++;
+      running++;
+      Promise.resolve().then(() => tasks[index](controller.signal)).then((value) => finish(resolve, value), (error) => {
+        running--;
+        lastError = error;
+        if (settled) return;
+        if (next < tasks.length) launch();
+        else if (!running) finish(reject, lastError);
+      });
+      if (next < tasks.length) timer = setTimeout(launch, stagger[index] ?? 4000);
+    };
+    launch();
+  });
+}
+
+const CACHE_NAME = 'topolab-osm-v1';
+const CACHE_DAYS = 30;
+const cacheKey = (origin, extent) => `https://topolab.local/osm?bbox=${bboxOf(origin, extent).join(',')}`;
+
+async function cachedOsm(origin, extent) {
   try {
-    return osmXmlToElements(await fetchWithin(`${OSM_API_URL}?bbox=${bboxOf(origin, extent).join(',')}`, {}, OSM_API_WAIT, signal));
-  } catch (error) {
-    if (signal?.aborted) throw error;
-    throw lastError || error;
-  }
+    if (typeof caches === 'undefined') return null;
+    const response = await (await caches.open(CACHE_NAME)).match(cacheKey(origin, extent));
+    if (!response) return null;
+    const age = Date.now() - Number(response.headers.get('x-saved') || 0);
+    if (age > CACHE_DAYS * 864e5) return null;
+    return await response.json();
+  } catch { return null; }
+}
+
+async function storeOsm(origin, extent, elements) {
+  try {
+    if (typeof caches === 'undefined') return;
+    const response = new Response(JSON.stringify(elements), { headers: { 'content-type': 'application/json', 'x-saved': String(Date.now()) } });
+    await (await caches.open(CACHE_NAME)).put(cacheKey(origin, extent), response);
+  } catch { /* storage full or unavailable: just no cache */ }
+}
+
+// Roads, trails, streams and land cover for the map. A place loaded before comes from the
+// browser's cache. Otherwise Overpass first; if it has not answered within 3 s the main OSM
+// API (fast for country boxes, refuses dense cities) joins, then the other Overpass servers.
+export async function fetchOsm({ origin, extent, signal }) {
+  const cached = await cachedOsm(origin, extent);
+  if (cached) return cached;
+  const body = 'data=' + encodeURIComponent(overpassQuery(origin, extent));
+  const overpass = (url) => async (s) => {
+    const data = await fetchWithin(url, { method: 'POST', body, headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }, OVERPASS_WAIT, s);
+    if (!Array.isArray(data?.elements)) throw new Error(`${url}: no elements`);
+    return data.elements;
+  };
+  const osmApi = async (s) => osmXmlToElements(await fetchWithin(`${OSM_API_URL}?bbox=${bboxOf(origin, extent).join(',')}`, {}, OSM_API_WAIT, s));
+  const elements = await raceStaggered([overpass(OVERPASS_URLS[0]), osmApi, overpass(OVERPASS_URLS[1]), overpass(OVERPASS_URLS[2])], { stagger: [3000, 4000, 5000], signal });
+  storeOsm(origin, extent, elements);
+  return elements;
+}
+
+// ——— Place search (Nominatim, OpenStreetMap's geocoder) ———
+// Called only when the user submits a search (Nominatim's usage policy: no search-as-you-type).
+export const NOMINATIM_URL = 'https://nominatim.openstreetmap.org/search';
+
+// A map size that fits a result's bounding box [south, north, west, east] (degrees).
+export function suggestSize(box) {
+  if (!Array.isArray(box) || box.length !== 4) return 4;
+  const [s, n, w, e] = box.map(Number);
+  const lat = (s + n) / 2;
+  const km = Math.max((n - s) * 111.2, (e - w) * 111.2 * Math.cos(lat * Math.PI / 180));
+  if (!Number.isFinite(km) || km <= 3) return 4;
+  return km <= 5 ? 6 : 8;
+}
+
+export function parsePlaces(list) {
+  return (Array.isArray(list) ? list : []).map((r) => {
+    const { e, n } = wgs84ToItm(Number(r.lat), Number(r.lon));
+    const parts = String(r.display_name || '').split(',').map((x) => x.trim()).filter(Boolean);
+    return {
+      name: r.name || parts[0] || '',
+      detail: parts.slice(1, 3).join(', '),
+      e: Math.round(e / 100) * 100,
+      n: Math.round(n / 100) * 100,
+      sizeKm: suggestSize(r.boundingbox),
+    };
+  }).filter((p) => p.name && isItmPoint(p.e, p.n));
+}
+
+const isItmPoint = (e, n) => e >= 100000 && e <= 300000 && n >= 350000 && n <= 820000;
+
+export async function searchPlaces(query, { signal } = {}) {
+  const url = `${NOMINATIM_URL}?format=jsonv2&limit=8&countrycodes=il,ps&accept-language=he&q=${encodeURIComponent(query)}`;
+  return parsePlaces(JSON.parse(await fetchWithin(url, {}, 12000, signal)));
 }
