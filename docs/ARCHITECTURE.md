@@ -34,6 +34,7 @@ index.html ── src/style.css
            ├── ghosts.js           ג״ג: הקו סביב המסלול והרוחות (טהור, עם בדיקות)
            ├── map-import.js       ייבוא מפה: מיקום משתי נקודות, הלבשה על השטח, PDF, IndexedDB. docs/MAP-IMPORT.md
            ├── map-import-ui.js    חלון "ייבוא מפה": העלאה, סימון נקודות, בחירת אזור
+           ├── view3d-overlay.js   על הדגם התלת־ממדי בעורך: המסלול, נקודות נ״צ, שמות מקומות, וסיכה במקום הסמן שבמפה
            ├── itm.js              רשת ישראל (ITM) ↔ WGS84 (טהור, עם בדיקות)
            ├── real-terrain.js     שטח אמיתי: אריחי גובה, OSM → תכסית, דאטום. docs/REAL-TERRAIN.md
            ├── rain.js             סימולטור הגשם: נחלים, אגמים, יציאות, אנימציה (2D + 3D). docs/RAIN.md

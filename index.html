@@ -91,8 +91,17 @@
             <button class="glass-button" id="viewLayersBtn" type="button" title="שכבות התצוגה" aria-label="שכבות התצוגה" aria-expanded="false" aria-controls="viewLayersPanel">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 9 5-9 5-9-5 9-5Z"/><path d="m5 12 7 4 7-4M5 16l7 4 7-4"/></svg>
             </button>
+            <button class="glass-button" id="zoomIn3dBtn" type="button" title="קירוב" aria-label="קירוב התצוגה">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+            </button>
+            <button class="glass-button" id="zoomOut3dBtn" type="button" title="הרחקה" aria-label="הרחקת התצוגה">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"/></svg>
+            </button>
             <div class="view-layers" id="viewLayersPanel" hidden>
               <strong>שכבות בתצוגה</strong>
+              <label><input type="checkbox" data-view3d="course"> מסלול ונקודות נ״צ</label>
+              <label><input type="checkbox" data-view3d="names"> שמות מקומות</label>
+              <label><input type="checkbox" data-view3d="features"> תכסית: דרכים, נחלים, יערות</label>
               <label><input type="checkbox" data-view3d="contours"> קווי גובה על הדגם</label>
               <label><input type="checkbox" data-view3d="grid"> רשת הקואורדינטות</label>
               <label><input type="checkbox" data-view3d="strata"> שכבות סלע בצדי הדגם</label>
@@ -109,6 +118,7 @@
             <button type="button" data-view-facing="south" class="vc-s" title="דרום למעלה">ד</button>
             <button type="button" data-view-facing="west" class="vc-w" title="מערב למעלה">מע</button>
           </div>
+          <div class="cursor-readout scene-readout" id="sceneReadout" aria-hidden="true" hidden></div>
           <div class="orbit-hint" id="orbitHint">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 11V7a2 2 0 0 1 4 0v4-6a2 2 0 0 1 4 0v7-3a2 2 0 0 1 4 0v6c0 4-3 6-7 6-3 0-5-2-7-5l-3-4a2 2 0 0 1 3-2l2 1Z"/></svg>
             גררו כדי לסובב · צבטו כדי לקרב
@@ -425,6 +435,7 @@
               <div class="map-mode-label" id="mapModeLabel" hidden></div>
               <div class="map-view-label" id="mapViewLabel" aria-live="polite">קנה מידה 1:25,000 · זום 100%</div>
               <div class="cursor-readout" id="cursorReadout" aria-hidden="true" hidden></div>
+              <div class="map-link-marker" id="mapLinkMarker" aria-hidden="true" hidden></div>
               <button type="button" class="water-info-toggle" id="waterInfoBtn" aria-controls="waterInfo" aria-expanded="false" title="פירוט: מה המים עושים כאן" hidden>i</button>
               <div class="feature-legend" id="featureLegend" aria-label="מקרא תכסית" hidden></div>
               <div class="map-zoom-controls" role="group" aria-label="זום והזזת המפה">

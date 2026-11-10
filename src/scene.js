@@ -13,6 +13,7 @@ import { createAutosave, loadProject, clearProject, serializeProject, parseProje
 import { createTeam } from './multiplayer.js';
 import { buildDrape, drapeSize, saveDrape, loadDrape, clearDrape } from './map-import.js';
 import { createMapImport } from './map-import-ui.js';
+import { createView3dOverlay } from './view3d-overlay.js';
 import { initShortcuts, SHORTCUTS, HOLD_HINTS, shortcutLabel } from './shortcuts.js';
 import { emptyCourse, sanitizeCourse, isRunnable, generateCourse, courseLength, drawCourse, coursePoints, cloneCourse } from './course.js';
 import { createNavGame } from './nav-game.js';
@@ -782,7 +783,9 @@ const sceneContainer = $('sceneContainer');
 const defaultCamera = new THREE.Vector3(13.6, 11.2, 14.8);
 // "מבט במרחב" display layers (the layers popover over the 3D view), saved per browser.
 const VIEW3D_KEY = 'topolab-view3d';
-const view3d = { contours: false, grid: false, strata: true, shadows: true, autoRotate: false };
+const view3d = { contours: false, grid: false, strata: true, shadows: true, autoRotate: false, features: true, course: true, names: true };
+let overlay3d = null;    // course, markers and names on the model (view3d-overlay.js)
+let terrainVersion = 0;  // bumped whenever the model's surface may have changed
 try { Object.assign(view3d, JSON.parse(localStorage.getItem(VIEW3D_KEY) || '{}')); } catch { /* storage unavailable */ }
 let shadowCatcher = null;
 let fillLight = null;
@@ -1161,6 +1164,7 @@ function initThree() {
         if (axes?.active) applyNavigation(axes, dt);
       }
       const moved = state.observer.firstPerson ? false : controls.update();
+      if (syncOverlay3d()) needsRender = true;
       if (moved || needsRender) updateCompass();
       if ((moved || needsRender) && !renderPaused) {
         if (!fieldEngine?.render()) renderer.render(scene, camera);
@@ -1178,12 +1182,115 @@ function initThree() {
   }
 }
 
+// ——— On top of the model: course, markers, names; the pointer's readout; zoom ———
+function syncOverlay3d() {
+  if (!scene) return false;
+  if (!overlay3d) {
+    overlay3d = createView3dOverlay({
+      worldSize: () => WORLD_SIZE,
+      height: sampleHeight,
+      verticalScale: () => metersToWorld() * state.exaggeration,
+      resolution: () => renderer.getDrawingBufferSize(new THREE.Vector2()),
+    });
+    scene.add(overlay3d.group);
+  }
+  const features = scene.getObjectByName('map-features');
+  if (features) {
+    const show = view3d.features || state.navigating;
+    if (features.visible !== show) { features.visible = show; needsRender = true; }
+  }
+  return overlay3d.sync({
+    visible: !state.navigating,
+    show: { course: view3d.course, names: view3d.names && showOsm() },
+    course: coursePoints(state.course),
+    labels: state.placeLabels,
+    waypoints: state.waypoints,
+    version: `${terrainVersion}|${N}|${state.mapSize}`,
+  });
+}
+
+// Where a ray from the camera through a point of the 3D view meets the ground: marched
+// over the height field (cheap, and exact enough for a readout). Returns { u, v } or null.
+const pickRay = new THREE.Raycaster();
+function pickGround(clientX, clientY) {
+  if (!camera || !renderer) return null;
+  const rect = renderer.domElement.getBoundingClientRect();
+  pickRay.setFromCamera(new THREE.Vector2((clientX - rect.left) / rect.width * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1), camera);
+  const { origin, direction } = pickRay.ray;
+  const half = WORLD_SIZE / 2;
+  const vs = metersToWorld() * state.exaggeration;
+  const ground = (p) => sampleHeight(clamp(p.x / WORLD_SIZE + .5, 0, 1), clamp(p.z / WORLD_SIZE + .5, 0, 1)) * vs;
+  const p = new THREE.Vector3();
+  const step = WORLD_SIZE / 500;
+  let last = 0;
+  for (let t = 0; t < WORLD_SIZE * 8; t += step) {
+    p.copy(origin).addScaledVector(direction, t);
+    if (Math.abs(p.x) <= half && Math.abs(p.z) <= half && p.y <= ground(p)) {
+      // Refine between the last point above the ground and this one.
+      let lo = last;
+      let hi = t;
+      for (let i = 0; i < 12; i++) {
+        const mid = (lo + hi) / 2;
+        p.copy(origin).addScaledVector(direction, mid);
+        if (p.y <= ground(p)) hi = mid; else lo = mid;
+      }
+      p.copy(origin).addScaledVector(direction, hi);
+      if (Math.abs(p.x) > half || Math.abs(p.z) > half) return null;
+      return { u: p.x / WORLD_SIZE + .5, v: p.z / WORLD_SIZE + .5 };
+    }
+    last = t;
+  }
+  return null;
+}
+
+// Hovering over the model: height, slope and grid reference by the pointer, and a cross
+// on the map at the same place, so the two views read as one.
+let sceneHoverQueued = null;
+function updateSceneHover() {
+  const event = sceneHoverQueued;
+  sceneHoverQueued = null;
+  const readout = $('sceneReadout');
+  const marker = $('mapLinkMarker');
+  const hit = event && !state.navigating && !state.observer.firstPerson ? pickGround(event.clientX, event.clientY) : null;
+  if (!hit) { readout.hidden = true; marker.hidden = true; return; }
+  const gx = hit.u * (N - 1);
+  const gy = hit.v * (N - 1);
+  const slope = slopePercent(heights, N, gx, gy, mapExtentMeters() / (N - 1));
+  readout.textContent = `${Math.round(displayHeight(sampleHeight(hit.u, hit.v)))} מ׳ · שיפוע ${slope < 1 ? slope.toFixed(1) : Math.round(slope)}% · נ״צ ${waypointText(hit)}`;
+  const box = sceneContainer.getBoundingClientRect();
+  readout.hidden = false;
+  const left = clamp(event.clientX - box.left + 14, 4, Math.max(4, box.width - readout.offsetWidth - 4));
+  const top = clamp(event.clientY - box.top - 34, 4, Math.max(4, box.height - 28));
+  readout.style.transform = `translate(${left}px, ${top}px)`;
+  const wrap = $('mapWrap').getBoundingClientRect();
+  const map = mapCanvas.getBoundingClientRect();
+  const mx = map.left + hit.u * map.width - wrap.left;
+  const my = map.top + hit.v * map.height - wrap.top;
+  marker.hidden = mx < 0 || my < 0 || mx > wrap.width || my > wrap.height;
+  marker.style.transform = `translate(${mx}px, ${my}px)`;
+}
+function queueSceneHover(event) {
+  const first = !sceneHoverQueued;
+  sceneHoverQueued = event;
+  if (first) requestAnimationFrame(updateSceneHover);
+}
+
+function zoom3d(factor) {
+  if (!camera || !controls || state.observer.firstPerson || state.navigating) return;
+  const offset = camera.position.clone().sub(controls.target);
+  offset.setLength(clamp(offset.length() * factor, controls.minDistance, controls.maxDistance));
+  camera.position.copy(controls.target).add(offset);
+  controls.update();
+  needsRender = true;
+}
+
 function resizeThree() {
   if (!renderer || !camera) return;
   const width = sceneContainer.clientWidth;
   const height = sceneContainer.clientHeight;
   if (!width || !height) return;
   renderer.setSize(width, height, false);
+  overlay3d?.setResolution(...renderer.getDrawingBufferSize(new THREE.Vector2()).toArray());
   camera.aspect = width / height;
   camera.fov = state.observer.firstPerson ? (state.observer.drone ? state.observer.fov || 74 : OBSERVER_FOV) : camera.aspect < 0.85 ? 52 : 43;
   camera.near = state.observer.firstPerson ? metersToWorld() * .3 : .1;
@@ -1277,6 +1384,7 @@ function reliefShade(i, cellM) {
 
 function updateTerrain() {
   if (!terrainGeometry) return;
+  terrainVersion++;
   const cellM = mapExtentMeters() / (N - 1);
   const positions = terrainGeometry.attributes.position;
   const colors = terrainGeometry.attributes.color;
@@ -1290,7 +1398,7 @@ function updateTerrain() {
     r = (r + (ROCK[0] - r) * relief.rock) * relief.shade;
     g = (g + (ROCK[1] - g) * relief.rock) * relief.shade;
     b = (b + (ROCK[2] - b) * relief.rock) * relief.shade;
-    if (areaTint && areaTint.length === heights.length * 4) {
+    if (areaTint && areaTint.length === heights.length * 4 && (view3d.features || state.navigating)) {
       const a = areaTint[i * 4 + 3];
       if (a > 0) {
         r += (areaTint[i * 4] - r) * a;
@@ -1620,7 +1728,7 @@ function updateSceneForMapSize() {
     scene.fog.far = 72 * sizeFactor;
   }
   if (controls) {
-    controls.minDistance = 9 * sizeFactor;
+    controls.minDistance = 4.5 * sizeFactor;
     controls.maxDistance = 30 * sizeFactor;
   }
   if (sunLight) {
@@ -2785,6 +2893,8 @@ let lastReadoutClient = null;
 function hideCursorReadout() {
   cursorReadout.hidden = true;
   lastReadoutClient = null;
+  overlay3d?.setPointer(null);
+  needsRender = true;
 }
 
 function updatePointReadout(pointer, event = null) {
@@ -2812,6 +2922,9 @@ function updatePointReadout(pointer, event = null) {
   cursorReadout.style.transform = `translate(${left}px, ${top}px)`;
   cursorReadout.hidden = false;
   updateBrushRing();
+  // Tools without a brush ring still show where the pointer is on the model.
+  overlay3d?.setPointer(brushRing?.visible || state.observer.firstPerson ? null : { u: pointer.gx / (N - 1), v: pointer.gy / (N - 1) });
+  needsRender = true;
 }
 
 function stopDrawing(event) {
@@ -3451,6 +3564,25 @@ $('topCameraBtn').addEventListener('click', () => {
   controls.update();
   needsRender = true;
   updateCompass();
+});
+$('zoomIn3dBtn').addEventListener('click', () => zoom3d(1 / 1.3));
+$('zoomOut3dBtn').addEventListener('click', () => zoom3d(1.3));
+sceneContainer.addEventListener('pointermove', (event) => {
+  if (event.target !== renderer?.domElement || event.buttons || event.pointerType === 'touch') { if (sceneHoverQueued === null) queueSceneHover(null); return; }
+  queueSceneHover(event);
+});
+sceneContainer.addEventListener('pointerleave', () => queueSceneHover(null));
+sceneContainer.addEventListener('pointerdown', () => queueSceneHover(null));
+// Double-click on the model: turn the view around that point.
+sceneContainer.addEventListener('dblclick', (event) => {
+  if (event.target !== renderer?.domElement || state.navigating || state.observer.firstPerson || !controls) return;
+  const hit = pickGround(event.clientX, event.clientY);
+  if (!hit) return;
+  const target = new THREE.Vector3((hit.u - .5) * WORLD_SIZE, sampleHeight(hit.u, hit.v) * metersToWorld() * state.exaggeration, (hit.v - .5) * WORLD_SIZE);
+  camera.position.add(target.clone().sub(controls.target));
+  controls.target.copy(target);
+  controls.update();
+  needsRender = true;
 });
 for (const button of document.querySelectorAll('[data-view-facing]')) {
   button.addEventListener('click', () => viewFacing(button.dataset.viewFacing));

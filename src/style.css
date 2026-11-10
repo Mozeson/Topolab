@@ -1220,3 +1220,12 @@ body.nav-team .nav-shout-btn { display: grid; }
   .import-viewer { height: 52dvh; }
   .import-dialog.working { width: 100vw; max-height: 100dvh; border-radius: 0; }
 }
+
+/* ——— The 3D view's interface (view3d-overlay.js) ——— */
+.scene-readout { z-index: 4; }
+body.navigating .scene-readout { display: none; }
+/* Where the pointer over the 3D model is on the map: a cross in the course's colour. */
+.map-link-marker { position: absolute; z-index: 5; left: 0; top: 0; width: 0; height: 0; pointer-events: none; }
+.map-link-marker::before, .map-link-marker::after { content: ''; position: absolute; background: #e2552d; box-shadow: 0 0 0 1.5px rgb(255 255 255 / 85%); border-radius: 2px; }
+.map-link-marker::before { left: -11px; top: -1px; width: 22px; height: 2px; }
+.map-link-marker::after { left: -1px; top: -11px; width: 2px; height: 22px; }
